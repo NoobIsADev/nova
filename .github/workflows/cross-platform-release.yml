@@ -1,0 +1,149 @@
+name: Build Windows, Linux and macOS releases
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nova-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check release version
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          if ("v$version" -ne $env:GITHUB_REF_NAME) { throw "Tag must match package.json version" }
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Run tests
+        run: npm run check
+      - name: Build Windows Setup and portable EXE
+        run: npm run build:win
+      - name: Assert updater metadata and installer exist
+        shell: pwsh
+        run: |
+          if (!(Test-Path dist/latest.yml)) { throw 'Missing Windows updater metadata latest.yml' }
+          if (!(Get-ChildItem dist/Nova-Browser-Setup-*.exe)) { throw 'Missing Windows Setup installer' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nova-release-windows
+          if-no-files-found: error
+          path: |
+            dist/Nova-Browser-Setup-*.exe
+            dist/Nova-Browser-Portable-*.exe
+            dist/*.blockmap
+            dist/latest.yml
+
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check release version
+        shell: bash
+        run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Run tests
+        run: npm run check
+      - name: Build Linux AppImage
+        run: npm run build:linux
+      - name: Assert updater metadata and AppImage exist
+        shell: bash
+        run: |
+          test -f dist/latest-linux.yml
+          compgen -G 'dist/Nova-Browser-Linux-*.AppImage' >/dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nova-release-linux
+          if-no-files-found: error
+          path: |
+            dist/Nova-Browser-Linux-*.AppImage
+            dist/latest-linux.yml
+
+  macos:
+    runs-on: macos-15
+    env:
+      # Add these repository secrets to enable signed, auto-updating Mac apps.
+      # With secrets absent, the DMG/ZIP are unsigned, manual-update test builds.
+      CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check release version
+        shell: bash
+        run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Run tests
+        run: npm run check
+      - name: Explain signing status
+        shell: bash
+        run: |
+          if [[ -n "$CSC_LINK" && -n "$CSC_KEY_PASSWORD" ]]; then
+            echo 'Building signed macOS DMG and ZIP (auto-update capable).'
+          else
+            echo '::warning::Mac signing secrets are not configured. Unsigned DMG and ZIP will be released for manual testing only; automatic macOS updates are disabled.'
+          fi
+      - name: Build universal Intel + Apple Silicon DMG/ZIP
+        run: npm run build:mac
+      - name: Assert updater metadata and release images exist
+        shell: bash
+        run: |
+          test -f dist/latest-mac.yml
+          compgen -G 'dist/Nova-Browser-macOS-*.dmg' >/dev/null
+          compgen -G 'dist/Nova-Browser-macOS-*.zip' >/dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nova-release-macos
+          if-no-files-found: error
+          path: |
+            dist/Nova-Browser-macOS-*.dmg
+            dist/Nova-Browser-macOS-*.zip
+            dist/latest-mac.yml
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: [windows, linux, macos]
+    steps:
+      - name: Collect builds and updater metadata
+        uses: actions/download-artifact@v4
+        with:
+          pattern: nova-release-*
+          merge-multiple: true
+          path: release-assets
+      - name: Verify all three updater manifests exist
+        shell: bash
+        run: |
+          test -s release-assets/latest.yml
+          test -s release-assets/latest-linux.yml
+          test -s release-assets/latest-mac.yml
+      - name: Publish one complete GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Nova Browser ${{ github.ref_name }}
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+          files: release-assets/*

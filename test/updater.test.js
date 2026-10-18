@@ -2,8 +2,11 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const {EventEmitter} = require('node:events');
-const {createUpdateService} = require('../lib/updater');
-const app = {isPackaged:true,getVersion:()=> '1.3.0'};
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const {createUpdateService, determineUpdateSupport, signedMacUpdateAvailable} = require('../lib/updater');
+const app = {isPackaged:true,getVersion:()=> '1.4.0'};
 function makeUpdater() {
   const emitter=new EventEmitter();
   emitter.calls=0;emitter.installs=0;
@@ -11,40 +14,68 @@ function makeUpdater() {
   emitter.quitAndInstall=()=>{emitter.installs++;};
   return emitter;
 }
-test('development launch never contacts the auto-update server',()=>{
+function makeService(platform,env={},extra={}) {
   const updater=makeUpdater();
-  const u=createUpdateService({app:{...app,isPackaged:false},dialog:{},getWindow:()=>null,notify:()=>{},updater,platform:'win32',env:{}});
-  u.start();assert.equal(u.snapshot().status,'unsupported');assert.equal(u.check(),false);assert.equal(updater.calls,0);
+  const service=createUpdateService({app,platform,env,updater,notify:()=>{},...extra});
+  return {service,updater};
+}
+test('dev launches never check GitHub, on any platform',()=>{
+  for(const platform of ['win32','linux','darwin']) {
+    const {service,updater}=makeService(platform,{APPIMAGE:'/tmp/nova.AppImage'},{app:{...app,isPackaged:false},signedMac:true});
+    service.start();assert.equal(service.snapshot().status,'unsupported');assert.equal(service.check(),false);assert.equal(updater.calls,0);
+  }
 });
-test('portable build never installs updates automatically',()=>{
-  const u=createUpdateService({app,dialog:{},getWindow:()=>null,notify:()=>{},updater:makeUpdater(),platform:'win32',env:{PORTABLE_EXECUTABLE_FILE:'nova.exe'}});
-  u.start();assert.match(u.snapshot().message,/Portable/);assert.equal(u.check(),false);
+test('Windows Setup supports updates, portable EXE does not',()=>{
+  assert.equal(determineUpdateSupport({platform:'win32',packaged:true,env:{}}).supported,true);
+  const {service}=makeService('win32',{PORTABLE_EXECUTABLE_FILE:'nova.exe'});
+  service.start();assert.match(service.snapshot().message,/Portable/);assert.equal(service.check(),false);
 });
-test('GitHub update checks and download progress with restart prompt',async()=>{
-  const updater=makeUpdater();let prompts=0;let changed=0;
-  const dialog={showMessageBox:async()=>{prompts++;return {response:1};}};
-  const u=createUpdateService({app,dialog,getWindow:()=>({isDestroyed:()=>false}),notify:()=>changed++,updater,platform:'win32',env:{}});
-  u.start();assert.equal(u.check(),true);assert.equal(u.snapshot().status,'checking');
-  await new Promise(resolve=>setImmediate(resolve));assert.equal(updater.calls,1);
-  updater.emit('update-available',{version:'1.3.1'});
-  assert.equal(u.snapshot().status,'available');
-  updater.emit('download-progress',{percent:56.7});assert.equal(u.snapshot().percent,57);
-  updater.emit('update-downloaded',{version:'1.3.1'});
-  await new Promise(resolve=>setImmediate(resolve));
-  assert.equal(u.snapshot().status,'downloaded');assert.equal(prompts,1);assert.equal(updater.installs,0);
-  assert.equal(changed>=4,true);
-  u.stop();
+test('Linux AppImage supports background updates but unpacked and deb builds do not',()=>{
+  assert.equal(determineUpdateSupport({platform:'linux',packaged:true,env:{APPIMAGE:'/home/user/Nova.AppImage'}}).supported,true);
+  const {service}=makeService('linux',{});
+  service.start();assert.match(service.snapshot().message,/AppImage/);assert.equal(service.check(),false);
 });
-test('updater can install after explicit restart confirmation',async()=>{
-  const updater=makeUpdater();
-  const dialog={showMessageBox:async()=>({response:0})};
-  const u=createUpdateService({app,dialog,getWindow:()=>({isDestroyed:()=>false}),notify:()=>{},updater,platform:'win32',env:{}});
-  u.start();updater.emit('update-downloaded',{version:'1.4.0'});
-  await new Promise(resolve=>setImmediate(resolve));assert.equal(updater.installs,1);u.stop();
+test('macOS updates enabled only in signed app builds',()=>{
+  assert.equal(determineUpdateSupport({platform:'darwin',packaged:true,signedMac:true}).supported,true);
+  assert.equal(determineUpdateSupport({platform:'darwin',packaged:true,signedMac:false}).supported,false);
+  const {service}=makeService('darwin');service.start();assert.match(service.snapshot().message,/signed macOS/);
 });
-test('updater error is recoverable by checking again',async()=>{
-  const updater=makeUpdater();
-  const u=createUpdateService({app,dialog:{},getWindow:()=>null,notify:()=>{},updater,platform:'win32',env:{}});
-  u.start();u.check();updater.emit('error',new Error('temporary network error'));
-  assert.equal(u.snapshot().status,'error');u.check();assert.equal(u.snapshot().status,'checking');u.stop();
+test('embedded signed-mac policy is read safely and defaults off',()=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'nova-updater-'));
+  assert.equal(signedMacUpdateAvailable(dir),false);
+  fs.writeFileSync(path.join(dir,'update-capabilities.json'),'{"macAutoUpdate":true}\n');
+  assert.equal(signedMacUpdateAvailable(dir),true);
+  fs.writeFileSync(path.join(dir,'update-capabilities.json'),'oops');
+  assert.equal(signedMacUpdateAvailable(dir),false);
+  fs.rmSync(dir,{recursive:true,force:true});
+});
+test('updater uses no prompt and installs on app quit for Windows, Linux, and signed Mac',async()=>{
+  for(const [platform,env,extra] of [['win32',{},{}],['linux',{APPIMAGE:'/tmp/nova.AppImage'},{}],['darwin',{}, {signedMac:true}]]) {
+    let changed=0;
+    const {service,updater}=makeService(platform,env,{...extra,notify:()=>changed++});
+    service.start();assert.equal(updater.autoDownload,true);
+    assert.equal(updater.autoInstallOnAppQuit,true);
+    assert.equal(updater.allowPrerelease,false);
+    assert.equal(service.check(),true);
+    await new Promise(resolve=>setImmediate(resolve));assert.equal(updater.calls,1);
+    updater.emit('update-available',{version:'1.4.1'});
+    updater.emit('download-progress',{percent:56.7});assert.equal(service.snapshot().percent,57);
+    updater.emit('update-downloaded',{version:'1.4.1'});
+    assert.equal(service.snapshot().status,'downloaded');
+    assert.match(service.snapshot().message,/when you close Nova/);
+    assert.equal(updater.installs,0); // install deferred to electron-updater's app-quit listener
+    assert.equal(service.check(),true);assert.equal(updater.calls,1); // do not recheck downloaded update
+    assert.ok(changed>=4);
+    service.stop();
+  }
+});
+test('update errors allow a new check',async()=>{
+  const {service,updater}=makeService('win32');service.start();
+  service.check();await new Promise(resolve=>setImmediate(resolve));
+  updater.emit('error',new Error('temporary network error'));
+  assert.equal(service.snapshot().status,'error');service.check();assert.equal(service.snapshot().status,'checking');service.stop();
+});
+test('start() attaches handlers only once',()=>{
+  const {service,updater}=makeService('win32');service.start();service.start();
+  assert.equal(updater.listenerCount('update-downloaded'),1);service.stop();
 });

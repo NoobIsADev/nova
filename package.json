@@ -1,7 +1,7 @@
 {
   "name": "nova-browser",
   "productName": "Nova Browser",
-  "version": "1.3.2",
+  "version": "1.4.0",
   "description": "A modern, DuckDuckGo-first Chromium desktop browser with built-in ad and tracker blocking.",
   "private": true,
   "author": "Nova Browser",
@@ -10,13 +10,17 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
-    "check": "node --check main.js && node --check preload.js && node --check internal-preload.js && node --check src/chrome.js && node --check src/internal.js && node --check src/icons.js && node --check lib/updater.js && node --check downloads-preload.js && node --check src/downloads-popover.js && node --check tools/prepare-logo.js && node --test test/*.test.js",
+    "check": "node --check main.js && node --check preload.js && node --check internal-preload.js && node --check src/chrome.js && node --check src/internal.js && node --check src/icons.js && node --check lib/updater.js && node --check tools/prepare-update-policy.js && node --check downloads-preload.js && node --check src/downloads-popover.js && node --check tools/prepare-logo.js && node --test test/*.test.js",
     "pack": "electron-builder --dir",
     "build": "electron-builder --publish never",
     "build:win": "electron-builder --win nsis portable --x64 --publish never",
     "build:linux": "electron-builder --linux AppImage --x64 --publish never",
     "prestart": "node tools/prepare-logo.js",
-    "prebuild:win": "node tools/prepare-logo.js"
+    "prebuild:win": "npm run prepare:release",
+    "prepare:release": "node tools/prepare-logo.js && node tools/prepare-update-policy.js",
+    "prebuild:linux": "npm run prepare:release",
+    "prebuild:mac": "npm run prepare:release",
+    "build:mac": "electron-builder --mac dmg zip --universal --publish never"
   },
   "dependencies": {
     "@ghostery/adblocker-electron": "^2.20.1",
@@ -77,11 +81,21 @@
       "category": "Network;WebBrowser",
       "target": [
         "AppImage"
-      ]
+      ],
+      "artifactName": "Nova-Browser-Linux-${version}-${arch}.${ext}"
     },
     "mac": {
       "icon": "build/icon.png",
-      "category": "public.app-category.productivity"
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "artifactName": "Nova-Browser-macOS-${version}-${arch}.${ext}",
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "notarize": true
     },
     "publish": [
       {
@@ -92,7 +106,13 @@
     ],
     "portable": {
       "artifactName": "Nova-Browser-Portable-${version}-${arch}.${ext}"
-    }
+    },
+    "extraResources": [
+      {
+        "from": "build/update-capabilities.json",
+        "to": "update-capabilities.json"
+      }
+    ]
   },
   "engines": {
     "node": ">=20"

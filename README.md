@@ -2,59 +2,117 @@
 
 A Chromium-powered Electron desktop browser with a custom dark interface inspired by modern gaming browsers and **DuckDuckGo as the default search engine**.
 
-## Quick start (Windows)
+## Nova 1.4.0 — Windows, Linux, macOS, and install-on-close updates
 
-1. Install **Node.js 22 or newer** from https://nodejs.org/ (npm is included).
-2. Extract the complete Nova-Browser ZIP.
-3. Double-click **`START-NOVA.bat`**. The first run downloads dependencies.
-4. To make a standalone app, double-click **`BUILD-WINDOWS.bat`**. Finished `.exe` files appear in `dist/`.
+**GitHub repository:** https://github.com/NoobIsADev/nova
 
-Alternatively, from the source folder:
+This is the same Nova browser with all its tabs, tab groups, DuckDuckGo search,
+bookmarks, downloads, history, privacy tabs, and Ghostery ad/tracker blocking
+on each operating system. The app is built from one Electron codebase.
 
-```bash
-npm install
-npm start
-```
+### Build and run from source
 
-Build for Windows:
+Install **Node.js 22 LTS+ and npm** on your computer. Then extract this ZIP.
 
-```bash
-npm run build:win
-```
+| Platform | Launch from source | Package for distribution | Auto-updating release |
+|---|---|---|---|
+| Windows 10/11 | `START-NOVA.bat` | `BUILD-WINDOWS.bat` or `npm run build:win` | NSIS **Setup EXE** |
+| Linux (x86_64) | `./START-NOVA.sh` | `./BUILD-LINUX.sh` or `npm run build:linux` | **AppImage** |
+| macOS (Intel + Apple Silicon) | `START-NOVA.command` | `BUILD-MACOS.command` or `npm run build:mac` on macOS | **Signed DMG** + ZIP updater payload |
 
-Linux AppImage (run on Linux):
+Shell scripts may need permission: `chmod +x START-NOVA.sh BUILD-LINUX.sh` (Linux) or
+`chmod +x START-NOVA.command BUILD-MACOS.command` (Mac).
 
-```bash
-npm install
-npm run build:linux
-```
+Alternatively, run `npm install` then `npm start` to develop on any platform.
+The dev version does **not** auto-update. The macOS DMG build must be made on a
+Mac; Linux AppImage on Linux; Windows Setup on Windows. GitHub Actions provides
+all three build operating systems automatically.
 
-> Packaging on the corresponding operating system is recommended. Windows builds should be performed on Windows.
+### How automatic updates work
 
-## Nova 1.3 — GitHub sync and automatic Windows updates
+1. Install Nova from a **GitHub Release**, not `npm start`.
+2. Nova checks GitHub Releases after approximately 12 seconds and every four
+   hours while running, then quietly downloads a newer version.
+3. Settings → Updates shows the download's progress. Once downloaded it says
+   **ready for the next launch**. **No restart prompt is displayed.**
+4. **Close Nova normally.** On Windows Setup and Linux AppImage, the updater
+   installs on quit; macOS uses its native signed-app staging/relaunch mechanism.
+   Open Nova again *after the installer finishes* to use the newer version.
 
-**Repository:** https://github.com/NoobIsADev/nova
+Only **fully downloaded** updates are ready on quit. A browser closed before
+the download finishes will check again when opened. Closing Nova by logging
+off/shutting down the operating system can interrupt installations; close it
+normally before shutdown. The app intentionally quits when its last window
+closes on macOS as well, making install-on-close behavior consistent.
 
-### Upload source to GitHub (double-click)
+**Update support varies by package:** Windows portable EXEs cannot auto-install;
+install Windows Setup. Linux automatic updates require a writable AppImage
+file. A downloaded `.AppImage` can be run with
+`chmod +x Nova-Browser-Linux-*.AppImage && ./Nova-Browser-Linux-*.AppImage`.
+An AppImage launched from a read-only directory cannot replace itself. On Mac,
+a **Developer ID signed** application is mandatory for auto-updates; unsigned
+DMGs are for manual testing only. Downloads and other features work without
+signing, but auto-updating does not.
 
-1. Install **Git for Windows** from https://git-scm.com/download/win (in addition to Node.js / npm). Sign in through the Git Credential Manager popup if asked.
-2. Extract this ZIP, then double-click **`UPLOAD-TO-GITHUB.bat`** in the root of the project.
-3. It initializes Git if needed, connects to `NoobIsADev/nova`, preserves the existing GitHub history, stages and commits the source, rebases onto the current `main`, then pushes. It never force-pushes. If Git asks for a name/email, configure those using the commands printed in the window and retry.
-4. Run the same script again whenever you change the source. **A normal source push does not release a browser update.**
+### Publish a three-platform update from Windows
 
-### Publish an update to installed browsers
+1. Install Git for Windows. Configure `git config --global user.name "Your Name"`
+   and `git config --global user.email "your-github-email"` once, if needed.
+2. To upload source changes without publishing, double-click
+   **`UPLOAD-TO-GITHUB.bat`**. It pushes to `NoobIsADev/nova` without force pushes.
+3. Each new release must have a new higher `version` in `package.json`.
+4. Double-click **`PUBLISH-RELEASE.bat`**. It pushes source and the matching
+   `v<version>` tag, which triggers `.github/workflows/cross-platform-release.yml`.
+5. GitHub Actions builds Windows Setup and portable EXE, Linux AppImage, and
+   macOS universal DMG and ZIP on the appropriate build runners; it validates
+   and publishes `latest.yml`, `latest-linux.yml`, and `latest-mac.yml` in
+   **one GitHub Release** after all build jobs have succeeded.
+6. Watch https://github.com/NoobIsADev/nova/actions and download published
+   packages from https://github.com/NoobIsADev/nova/releases.
 
-1. Edit the `version` in `package.json` **to a new, higher version** for each new release, e.g. `1.3.1`.
-2. Double-click **`PUBLISH-RELEASE.bat`**. It uploads the latest source, checks that the version tag is unused, and pushes `v<version>` to GitHub.
-3. GitHub Actions (`.github/workflows/windows-release.yml`) builds both a Windows NSIS Setup installer and a portable EXE. On success, it publishes a public GitHub Release with `latest.yml`, installer, portable EXE, and blockmaps.
-4. Download the **Setup** installer from https://github.com/NoobIsADev/nova/releases/latest and install it. **Only installed Windows Setup builds auto-install updates**; npm development launches and portable EXEs do not.
-5. After that initial installation, Nova checks GitHub Releases at startup (after ~12 seconds) and every 4 hours, automatically downloads a newer published version, and prompts to restart. Selecting Later keeps the browser running; the update applies on exit.
+An upload to the `main` branch **does not** trigger a user-facing update; the
+new GitHub Release from a version tag does. Installed versions before updater
+support must first be replaced with the latest setup package manually.
 
-Nova v1.3.0 is the first auto-update-capable version; any previous v1.2 or older installer needs a manual one-time update to v1.3.0. For a real update test, publish `v1.3.0`, install its setup, then bump to `1.3.1` and publish `v1.3.1`. The latest GitHub Release **must** contain the installer and `latest.yml`.
+### Required macOS signing credentials for full automatic updates
 
-**Security and distribution:** This sample release workflow creates **unsigned** Windows binaries. SmartScreen may show warnings. Before distributing broadly, set up Authenticode signing and ensure your GitHub account and release workflow are trusted, since users will execute updates published by this repository. Never paste a GitHub personal access token into this project. Git for Windows authenticates through the Windows credential manager; GitHub Actions uses its short-lived automatic `GITHUB_TOKEN`.
+Apple **requires code signing** for Squirrel.Mac auto-updates. For releases to
+be signed and notarized, enroll in the paid Apple Developer Program, get a
+**Developer ID Application** certificate, export it as a password-protected
+`.p12`, and configure these **GitHub repository Actions secrets**:
 
-**Logo requirement:** The Windows release runner downloads `https://i.imgur.com/P5SoPEh.png` via `tools/prepare-logo.ps1`. If Imgur blocks this in GitHub Actions, save the transparent image as `build/logo.png` locally, add and upload that file, and retry publishing **with a new version tag**. The script will use the local file.
+- `MAC_CSC_LINK` — base64-encoded `.p12` certificate (not a URL)
+- `MAC_CSC_KEY_PASSWORD` — password of the exported certificate
+- `APPLE_ID` — your Apple account email
+- `APPLE_APP_SPECIFIC_PASSWORD` — an Apple app-specific password
+- `APPLE_TEAM_ID` — your Apple Developer Team ID
+
+Add secrets under **repository → Settings → Secrets and variables → Actions**.
+The certificate and passwords must remain in GitHub secrets: **never commit
+credentials, key files, or personal tokens into this project**. CI supplies
+these values while packaging. With `MAC_CSC_LINK` and `MAC_CSC_KEY_PASSWORD`
+set, the packaged Mac app is marked auto-update capable. Apple notarization
+also requires the three `APPLE_*` secrets. The universal build targets both
+Apple Silicon and Intel Macs. A `.zip` is published alongside the `.dmg`
+because Squirrel.Mac uses it as the update payload.
+
+**Without the Apple secrets**, GitHub Actions still creates an **unsigned Mac
+DMG/ZIP** for testing, but the Mac browser explicitly reports that automatic
+updates are unavailable. This is an Apple security requirement, not something
+Nova can bypass safely. The Mac build may show Gatekeeper restrictions until
+it is signed and notarized. For broad distribution, Windows signing is also
+recommended to avoid SmartScreen warnings.
+
+### User logo
+
+Nova uses your transparent PNG from https://i.imgur.com/P5SoPEh.png for the
+new-tab logo and all platform app icons. Build scripts download it during
+packaging. If Imgur blocks downloads in your environment, manually save the
+**actual image** as `build/logo.png` before running `npm run build:...` or
+pushing a release tag. Ensure it is a valid PNG, not an HTML page. macOS and
+Linux use `build/icon.png`, while Windows also generates `build/icon.ico`.
+
+### Version history
 
 ## Nova 1.3.1 update
 
@@ -102,7 +160,7 @@ A running old copy of Nova needs to be closed before rebuilding; if you previous
 - Minimal new tab page, global bookmarks toolbar, colored tab groups, history, and download list.
 - Separate private tabs with a non-persistent session and no recorded browsing history.
 - Dark interface with customizable accent color and a sidebar limited to the New Tab page.
-- Windows installer and portable EXE via `electron-builder`.
+- Windows installer and portable EXE, Linux AppImage, and macOS universal DMG/ZIP via `electron-builder`.
 - Persistent bookmarks/history/settings in Electron's user-data directory.
 
 ## Protection details / realistic limitations
@@ -113,7 +171,7 @@ Nova uses `@ghostery/adblocker-electron` with Ghostery's **prebuilt ads and trac
 
 **Safety and site compatibility:** This is an independently authored starter browser, not a security-equivalent replacement for Brave/Chrome/Firefox. It does not currently implement Chrome Web Store extension support, bookmark synchronization, password management, per-site shield exceptions, or full browser-level sandbox hardening. Chromium/Electron and filter dependencies should be updated regularly. The browser denies sensitive site permissions by default unless the user approves a request. Untrusted websites do not get Electron/Node APIs (`sandbox`, `contextIsolation`, and `nodeIntegration:false`).
 
-The Windows installer is **unsigned**; Windows SmartScreen may warn about an unrecognized app. For public distribution, arrange software code signing and further security testing.
+The Windows installer is **unsigned** by default; Windows SmartScreen may warn about an unrecognized app. Unsigned Mac builds cannot receive automatic updates. For public distribution, arrange software code signing and further security testing.
 
 ## Useful shortcuts
 
@@ -144,11 +202,13 @@ The Windows installer is **unsigned**; Windows SmartScreen may warn about an unr
 - `src/filters-fallback.txt`: limited offline domain filter list.
 - `tools/prepare-logo.ps1`, `tools/prepare-logo.js`: fetch and convert the user-provided PNG for Windows icons.
 - `build/logo.png`, `build/icon.ico`, `build/icon.png`: generated assets, created when you start/build.
+- `tools/prepare-update-policy.js`: records whether a macOS build was signed for updater eligibility.
 - `src/downloads-popover.*`: floating downloads panel.
-- `lib/updater.js`: GitHub Releases update service and install prompts.
+- `lib/updater.js`: GitHub Releases update service, unattended download and install-on-quit behavior.
 - `UPLOAD-TO-GITHUB.bat`: push project source to GitHub without force pushing.
-- `PUBLISH-RELEASE.bat`: tag a new version and trigger GitHub Actions.
-- `.github/workflows/windows-release.yml`: build and publish update-ready Windows releases.
+- `PUBLISH-RELEASE.bat`: tag a new version and trigger cross-platform GitHub Actions.
+- `BUILD-LINUX.sh` / `BUILD-MACOS.command`: local AppImage and DMG builders.
+- `.github/workflows/cross-platform-release.yml`: build and publish Windows, Linux, and macOS packages and updater manifests.
 
 ## Testing
 

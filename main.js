@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {fileURLToPath} = require('node:url');
 const {targetFor, isWebURL, displayAddress, INTERNAL} = require('./lib/navigation');
-const {createUpdateService} = require('./lib/updater');
+const {createUpdateService, signedMacUpdateAvailable} = require('./lib/updater');
 const {hasVisibleBookmarks} = require('./lib/bookmark-bar');
 
 const CHROME_BASE_HEIGHT = 103;
@@ -555,7 +555,7 @@ function browserAction(type, payload) {
       return downloadAction(type, payload?.id);
     case 'settings':return updateSetting(payload?.key,payload?.value);
     case 'check-updates':return updateService?.check() ?? false;
-    case 'install-update':return updateService?.askToRestart() ?? false;
+    case 'install-update':return false; // Updates install automatically when the browser closes.
     case 'clear-history':historyItems=[];saveSoon();sendInternalUpdate();return true;
     case 'window-minimize':win.minimize();return;
     case 'window-maximize':win.isMaximized()?win.unmaximize():win.maximize();emitState();return;
@@ -739,6 +739,8 @@ function checkInternalSender(event) {
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
   if (process.platform === 'win32') app.setAppUserModelId('com.nova.browser');
+  if (process.platform === 'darwin' && app.dock && fs.existsSync(path.join(__dirname,'build','icon.png')))
+    app.dock.setIcon(path.join(__dirname,'build','icon.png'));
   loadData();
   normalSession=session.fromPartition('persist:nova');
   privateSession=session.fromPartition('nova-private');
@@ -782,7 +784,7 @@ app.whenReady().then(() => {
       case 'refresh-filters':initAdblock(true);return true;
       case 'open-release-page':shell.openExternal('https://github.com/NoobIsADev/nova/releases/latest');return true;
       case 'check-updates':return updateService?.check() ?? false;
-      case 'install-update':return updateService?.askToRestart() ?? false;
+      case 'install-update':return false; // Updates install automatically when the browser closes.
       case 'show-download':{
         const item=downloads.find(d=>d.id===payload?.id);
         if(item && item.path && fs.existsSync(item.path))shell.showItemInFolder(item.path);
@@ -792,12 +794,17 @@ app.whenReady().then(() => {
       default:return null;
     }
   });
-  // Only the installed NSIS application checks GitHub Releases. Development and portable builds do not auto-install.
+  // Windows Setup, Linux AppImage, and signed macOS DMG builds receive updates.
+  // Unsigned macOS builds and Windows portable builds stay manual-update only.
+  const signedMac = process.platform === 'darwin' && app.isPackaged && signedMacUpdateAvailable(process.resourcesPath);
+  const canLoadUpdater = app.isPackaged && (
+    (process.platform === 'win32' && !process.env.PORTABLE_EXECUTABLE_FILE) ||
+    (process.platform === 'linux' && !!process.env.APPIMAGE) ||
+    (process.platform === 'darwin' && signedMac)
+  );
   updateService = createUpdateService({
-    app, dialog, getWindow:()=>win,
-    notify:()=>{emitState();sendInternalUpdate();},
-    updater: process.platform === 'win32' && app.isPackaged && !process.env.PORTABLE_EXECUTABLE_FILE
-      ? require('electron-updater').autoUpdater : null
+    app, signedMac, notify:()=>{emitState();sendInternalUpdate();},
+    updater:canLoadUpdater ? require('electron-updater').autoUpdater : null
   });
   createWindow();
   updateService.start();
@@ -810,4 +817,6 @@ app.on('before-quit',()=>{
   clearTimeout(writeTimer);
   if(settings)try{fs.writeFileSync(dataFile(),JSON.stringify(settingsFile(),null,2));}catch{}
 });
-app.on('window-all-closed',()=>{if(process.platform!=='darwin')app.quit();});
+// Closing the last window quits on all platforms (including macOS), so the
+// downloaded update installs on exit instead of leaving a headless Mac app.
+app.on('window-all-closed',()=>app.quit());

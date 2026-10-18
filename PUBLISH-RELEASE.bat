@@ -19,11 +19,11 @@ if not defined VERSION goto fail
 set "TAG=v%VERSION%"
 echo.
 echo =============================================
-echo   NOVA - PUBLISH WINDOWS AUTO-UPDATE
+echo   NOVA - PUBLISH ALL PLATFORM UPDATES
  echo =============================================
 echo This will push source and publish the tag %TAG%.
-echo GitHub Actions will build the Windows Setup installer, portable EXE,
-echo and latest.yml update metadata for installed Nova browsers.
+echo GitHub Actions will build Windows Setup/portable EXEs, Linux AppImage,
+echo macOS universal DMG/ZIP and all three auto-update manifests.
 echo.
 choice /M "Publish %TAG% now"
 if errorlevel 2 exit /b 0

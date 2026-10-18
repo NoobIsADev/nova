@@ -78,17 +78,17 @@ function settingsPage(){
     color.addEventListener('click',async()=>{await actions.action('toggle-setting',{key:'accent',value:c});await update();});dots.append(color);
   }appearance.append(colors);
   const updates=el('section','settings-card');updates.id='updates';main.append(updates);
-  updates.innerHTML='<h2>Browser updates</h2><p class="description">Nova checks published GitHub Releases on startup and every four hours when installed with Windows Setup.</p>';
+  updates.innerHTML='<h2>Browser updates</h2><p class="description">Nova checks GitHub Releases at startup and every four hours on Windows Setup, Linux AppImage, and signed macOS installs. Updates download quietly and install when you close the browser.</p>';
   const updateInfo=state.updates || {status:'unsupported',currentVersion:'',message:'Updates unavailable in this build.'};
   const updateRow=el('div','setting-line');const updateText=el('div');
   updateText.append(el('strong','',`Version ${updateInfo.currentVersion || 'unknown'}`));
   updateText.append(el('div','note',updateInfo.message));
   updateRow.append(updateText);
-  const action=makeButton(updateInfo.status==='downloaded'?'Restart to update':'Check now','outline-btn',async()=>{
-    await actions.action(updateInfo.status==='downloaded'?'install-update':'check-updates');
+  const action=makeButton(updateInfo.status==='downloaded'?'Ready for next launch':'Check now','outline-btn',async()=>{
+    if(updateInfo.status!=='downloaded')await actions.action('check-updates');
     await update();
-  }, updateInfo.status==='downloaded'?'reload':'download');
-  if(['checking','downloading','available','unsupported'].includes(updateInfo.status)) action.disabled=true;
+  }, updateInfo.status==='downloaded'?'check':'download');
+  if(['checking','downloading','available','downloaded','unsupported'].includes(updateInfo.status)) action.disabled=true;
   updateRow.append(action);updates.append(updateRow);
   if(['downloading','available','downloaded'].includes(updateInfo.status)) {
     const progress=el('div','note',`${updateInfo.percent||0}% downloaded${updateInfo.version?' · v'+updateInfo.version:''}`);
