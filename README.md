@@ -165,3 +165,16 @@ This validates all JavaScript and runs the Node navigation tests. Testing the ac
 - DuckDuckGo: https://duckduckgo.com/
 
 Nova is not affiliated with Brave, Opera, YouTube, DuckDuckGo, or Ghostery.
+
+### Nova 1.3.2 — Window dragging fix
+
+You can move the frameless Nova Browser window by holding the left mouse button on the
+**empty area of the top tab bar** (between the New Tab `+` button and the window controls),
+then dragging. Double-click this blank area to maximize or restore the window.
+The blank area expands automatically when fewer tabs are open and always maintains
+space for dragging when the tab bar fills up. Tabs, tab groups, and minimize/maximize/close
+buttons remain interactive.
+
+After editing, run `START-NOVA.bat` to preview or `BUILD-WINDOWS.bat` to make the
+installer. To distribute through GitHub auto-updates, run `UPLOAD-TO-GITHUB.bat`
+then `PUBLISH-RELEASE.bat` to publish `v1.3.2`.

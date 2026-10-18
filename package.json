@@ -1,7 +1,7 @@
 {
   "name": "nova-browser",
   "productName": "Nova Browser",
-  "version": "1.3.1",
+  "version": "1.3.2",
   "description": "A modern, DuckDuckGo-first Chromium desktop browser with built-in ad and tracker blocking.",
   "private": true,
   "author": "Nova Browser",
