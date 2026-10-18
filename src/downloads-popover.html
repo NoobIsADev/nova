@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'none'">
+<title>Recent downloads</title>
+<link rel="stylesheet" href="downloads-popover.css">
+</head>
+<body>
+<main class="panel" aria-label="Recent downloads">
+  <header class="panel-head">
+    <div class="head-title"><span id="title-icon"></span><strong>Downloads</strong><span id="counter"></span></div>
+    <button type="button" id="close" class="icon-btn" title="Close (Esc)" aria-label="Close downloads"></button>
+  </header>
+  <div id="entries" class="entries" role="list" aria-live="polite"></div>
+  <footer class="panel-foot">
+    <button id="all-downloads" class="text-button">All downloads <span id="arrow-icon"></span></button>
+    <button id="clear" class="text-button subtle">Clear finished</button>
+  </footer>
+</main>
+<script src="icons.js"></script>
+<script src="downloads-popover.js"></script>
+</body>
+</html>

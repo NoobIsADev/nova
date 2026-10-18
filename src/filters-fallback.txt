@@ -1,0 +1,23 @@
+! Nova Browser local fallback ad/tracker rules.
+! The complete Ghostery community filter engine is loaded/cached separately.
+||doubleclick.net^
+||googlesyndication.com^
+||googleadservices.com^
+||adservice.google.com^
+||adnxs.com^
+||outbrain.com^
+||taboola.com^
+||scorecardresearch.com^
+||criteo.com^
+||amazon-adsystem.com^
+||adsrvr.org^
+||facebook.net/en_US/fbevents.js
+||ads.youtube.com^
+||securepubads.g.doubleclick.net^
+||pagead2.googlesyndication.com^
+||static.doubleclick.net^
+||pubads.g.doubleclick.net^
+||ads-twitter.com^
+||pixel.facebook.com^
+||analytics.tiktok.com^
+||bat.bing.com/action^

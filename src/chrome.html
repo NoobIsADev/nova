@@ -1,0 +1,59 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' https: http: data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'">
+<title>Nova Browser</title><link rel="stylesheet" href="chrome.css"></head>
+<body>
+<header id="shell" class="shell">
+  <div class="topbar">
+    <div id="tabs" class="tabs"></div>
+    <button id="add-tab" class="tab-add no-drag" title="New tab (Ctrl+T)"></button>
+    <div class="drag top-spacer"></div>
+    <div class="window-actions no-drag">
+      <button class="win-btn" data-window="window-minimize" title="Minimize" id="btn-min"></button>
+      <button class="win-btn" data-window="window-maximize" title="Maximize" id="btn-max"></button>
+      <button class="win-btn close-btn" data-window="window-close" title="Close" id="btn-close"></button>
+    </div>
+  </div>
+  <div class="toolbar">
+    <div class="navigation-buttons">
+      <button class="icon-button" id="back" title="Back (Alt+Left)"></button>
+      <button class="icon-button" id="forward" title="Forward (Alt+Right)"></button>
+      <button class="icon-button" id="reload" title="Reload (Ctrl+R)"></button>
+      <button class="icon-button home-btn" id="home" title="Start page"></button>
+    </div>
+    <form id="address-form" class="addressbar" autocomplete="off">
+      <span id="site-status" class="site-status"></span>
+      <input id="address" aria-label="Search or enter a URL" spellcheck="false" placeholder="Search privately with DuckDuckGo or enter an address" autocomplete="off" />
+      <button type="button" class="address-shield" id="address-shield" title="Toggle shields"></button>
+    </form>
+    <div class="right-actions">
+      <button class="icon-button" id="bookmark" title="Bookmark this page (Ctrl+D)"></button>
+      <div class="vertical-separator"></div>
+      <button class="icon-button" id="downloads" title="Recent downloads (Ctrl+J)" aria-label="Recent downloads" aria-expanded="false"></button>
+      <button class="icon-button" id="settings" title="Settings"></button>
+    </div>
+    <div id="findbox" class="findbox hidden"><input id="find-input" aria-label="Find in page" placeholder="Find in page…"><button id="find-next" title="Next result"></button><button id="find-close" title="Close find"></button></div>
+  </div>
+  <div id="bookmarksbar" class="bookmarksbar hidden" aria-label="Bookmarks bar">
+    <div class="bookmark-items" id="bookmark-items"></div>
+    <button id="bookmarks-more" class="bookmark-more no-drag" title="All bookmarks" aria-label="All bookmarks"></button>
+  </div>
+  <div id="progress" class="progress"></div>
+</header>
+<aside id="sidebar" class="sidebar">
+  <div class="sidebar-stack">
+    <button class="side-button active" data-page="newtab" title="Start page" id="side-home"></button>
+    <div class="side-divider"></div>
+    <button class="side-button" data-url="https://www.youtube.com/" title="YouTube" id="side-youtube"></button>
+    <button class="side-button" data-url="https://discord.com/app" title="Discord" id="side-discord"></button>
+    <button class="side-button" data-url="https://www.twitch.tv/" title="Twitch" id="side-twitch"></button>
+    <button class="side-button" data-url="https://github.com/" title="GitHub" id="side-github"></button>
+  </div>
+  <div class="sidebar-bottom">
+    <button class="side-button" data-page="history" title="History" id="side-history"></button>
+    <button class="side-button" data-page="downloads" title="Downloads" id="side-downloads"></button>
+    <button class="side-button" data-page="settings" title="Settings" id="side-settings"></button>
+  </div>
+</aside>
+<div id="empty-area"></div>
+<script src="icons.js"></script><script src="chrome.js"></script></body></html>

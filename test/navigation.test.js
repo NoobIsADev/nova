@@ -1,0 +1,12 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const {targetFor, isWebURL, displayAddress} = require('../lib/navigation');
+test('empty input opens start page', () => assert.deepEqual(targetFor(''), {kind:'internal',page:'newtab'}));
+test('internal route works', () => assert.deepEqual(targetFor('nova://settings'), {kind:'internal',page:'settings'}));
+test('domain becomes https', () => assert.equal(targetFor('youtube.com/watch?v=1').url, 'https://youtube.com/watch?v=1'));
+test('local development addresses are http', () => assert.equal(targetFor('localhost:3000').url,'http://localhost:3000/'));
+test('text becomes DuckDuckGo query', () => assert.equal(targetFor('cool browser').url, 'https://duckduckgo.com/?q=cool%20browser'));
+test('unsafe schemes are searched, not executed', () => assert.equal(targetFor('javascript:alert(1)').url,'https://duckduckgo.com/?q=javascript%3Aalert(1)'));
+test('web url checker', () => {assert.equal(isWebURL('https://example.org'),true); assert.equal(isWebURL('file:///etc/passwd'),false)});
+test('internal displayed URL', () => assert.equal(displayAddress({kind:'internal',page:'history'}),'nova://history'));
+test('LAN IP works', () => assert.equal(targetFor('192.168.1.1:8080').url,'http://192.168.1.1:8080/'));
