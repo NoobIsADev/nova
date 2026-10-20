@@ -2,6 +2,43 @@
 
 A Chromium-powered Electron desktop browser with a custom dark interface inspired by modern gaming browsers and **DuckDuckGo as the default search engine**.
 
+## Download the Linux AppImage — no building needed
+
+**Linux (x64):** [Download Nova from GitHub Releases](https://github.com/NoobIsADev/nova/releases/tag/v1.4.0). Open **Assets**, select `Nova-Browser-Linux-1.4.0-x64.AppImage`, then on Linux run:
+
+```bash
+chmod +x Nova-Browser-Linux-1.4.0-x64.AppImage
+./Nova-Browser-Linux-1.4.0-x64.AppImage
+```
+
+**If the AppImage is not yet listed:** on Windows, run `PUBLISH-APPIMAGE-TO-GITHUB.bat` from the project folder. The script signs you into GitHub (via GitHub CLI), downloads the already-built v1.4.0 AppImage from the successful GitHub Actions Linux job, and uploads the AppImage plus `latest-linux.yml` to GitHub Releases. You do **not** need to compile or build anything to publish it.
+
+**For later releases:** `.github/workflows/cross-platform-release.yml` builds an AppImage on Linux automatically whenever you push a new `vX.Y.Z` tag, then publishes the Linux files even if Windows or macOS fails. Upload this updated workflow to GitHub once using `UPLOAD-TO-GITHUB.bat`, then continue using `PUBLISH-RELEASE.bat` with an increased version.
+
+## Nova 1.4.1 — one-click GitHub release with ready-made AppImage
+
+**To publish:** On Windows, extract this complete project and double-click
+**`PUBLISH-TO-GITHUB.bat`**. It only requires Git for Windows and PowerShell
+(no local Node/npm build). Sign in to GitHub if asked. The script safely clones
+`NoobIsADev/nova`, copies the updated source, pushes `main` and publishes the
+`v1.4.1` tag. This triggers GitHub Actions, which **builds and uploads the Linux
+`.AppImage` automatically to GitHub Releases**. Everyone can then download the
+AppImage without building anything.
+
+**Download:** https://github.com/NoobIsADev/nova/releases/tag/v1.4.1
+
+The same run makes Windows Setup/portable EXEs and attempts the universal macOS
+DMG/ZIP. Linux publishes even if macOS fails. The unsigned macOS build skips
+notarization; signed auto-updating Mac releases require Apple Developer signing
+credentials. GitHub Actions must be enabled and have permission to write
+repository Releases (Repository → Settings → Actions → General → Workflow
+permissions → Read and write permissions). If the tag already exists,
+increment `package.json` first. Do not commit secrets in the project folder.
+
+**This ZIP contains source and a publishing script, not the compiled AppImage.**
+The GitHub Actions run creates and attaches the binary after the script uploads
+the release tag; allow a few minutes for the build.
+
 ## Nova 1.4.0 — Windows, Linux, macOS, and install-on-close updates
 
 **GitHub repository:** https://github.com/NoobIsADev/nova
@@ -66,7 +103,7 @@ signing, but auto-updating does not.
 5. GitHub Actions builds Windows Setup and portable EXE, Linux AppImage, and
    macOS universal DMG and ZIP on the appropriate build runners; it validates
    and publishes `latest.yml`, `latest-linux.yml`, and `latest-mac.yml` in
-   **one GitHub Release** after all build jobs have succeeded.
+   **one GitHub Release** with whichever platforms succeeded, provided the Linux AppImage build succeeded.
 6. Watch https://github.com/NoobIsADev/nova/actions and download published
    packages from https://github.com/NoobIsADev/nova/releases.
 

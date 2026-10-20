@@ -1,7 +1,7 @@
 {
   "name": "nova-browser",
   "productName": "Nova Browser",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "A modern, DuckDuckGo-first Chromium desktop browser with built-in ad and tracker blocking.",
   "private": true,
   "author": "Nova Browser",
@@ -20,7 +20,8 @@
     "prepare:release": "node tools/prepare-logo.js && node tools/prepare-update-policy.js",
     "prebuild:linux": "npm run prepare:release",
     "prebuild:mac": "npm run prepare:release",
-    "build:mac": "electron-builder --mac dmg zip --universal --publish never"
+    "build:mac": "electron-builder --mac dmg zip --universal --publish never",
+    "build:mac:unsigned": "electron-builder --mac dmg zip --universal --publish never --config.mac.notarize=false"
   },
   "dependencies": {
     "@ghostery/adblocker-electron": "^2.20.1",

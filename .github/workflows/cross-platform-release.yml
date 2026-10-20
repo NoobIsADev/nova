@@ -105,8 +105,14 @@ jobs:
           else
             echo '::warning::Mac signing secrets are not configured. Unsigned DMG and ZIP will be released for manual testing only; automatic macOS updates are disabled.'
           fi
-      - name: Build universal Intel + Apple Silicon DMG/ZIP
+      - name: Build signed and notarized universal Mac DMG/ZIP
+        if: ${{ env.CSC_LINK != '' && env.CSC_KEY_PASSWORD != '' }}
         run: npm run build:mac
+      - name: Build unsigned universal Mac DMG/ZIP (manual install only)
+        if: ${{ env.CSC_LINK == '' || env.CSC_KEY_PASSWORD == '' }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run build:mac:unsigned
       - name: Assert updater metadata and release images exist
         shell: bash
         run: |
@@ -123,6 +129,8 @@ jobs:
             dist/latest-mac.yml
 
   publish:
+    # The Linux AppImage is published even when a Windows or macOS job fails.
+    if: ${{ always() && needs.linux.result == 'success' }}
     runs-on: ubuntu-latest
     needs: [windows, linux, macos]
     steps:
@@ -132,13 +140,14 @@ jobs:
           pattern: nova-release-*
           merge-multiple: true
           path: release-assets
-      - name: Verify all three updater manifests exist
+      - name: Verify Linux AppImage is ready for direct download
         shell: bash
         run: |
-          test -s release-assets/latest.yml
           test -s release-assets/latest-linux.yml
-          test -s release-assets/latest-mac.yml
-      - name: Publish one complete GitHub Release
+          compgen -G 'release-assets/Nova-Browser-Linux-*.AppImage' >/dev/null
+          if ! test -s release-assets/latest.yml; then echo '::warning::Windows build unavailable on this release'; fi
+          if ! test -s release-assets/latest-mac.yml; then echo '::warning::Mac build unavailable on this release'; fi
+      - name: Publish Linux AppImage and any other completed installers to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
           name: Nova Browser ${{ github.ref_name }}
