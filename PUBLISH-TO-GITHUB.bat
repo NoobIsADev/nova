@@ -77,7 +77,7 @@ git add -A
 if errorlevel 1 goto fail
 git diff --cached --quiet
 if errorlevel 1 (
-  git commit -m "Release Nova Browser %TAG% with detachable tabs and native file dragging"
+  git commit -m "Release Nova Browser %TAG% with adaptive downloads popup and auto-open on download"
   if errorlevel 1 goto fail
 ) else (
   echo [INFO] Source is unchanged. Publishing the existing main commit.

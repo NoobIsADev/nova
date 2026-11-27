@@ -28,7 +28,7 @@ function draw(items){
   $('#counter').hidden=list.length===0;
   if(!list.length){
     const empty=el('div','empty');empty.innerHTML=I('download',35);
-    empty.append(el('h3','','No downloads yet'),el('p','','Your recent downloads will show up here.'));
+    empty.append(el('h3','','No downloads yet'));
     target.append(empty);$('#clear').disabled=true;return;
   }
   $('#clear').disabled=!list.some(d=>d.state!=='progressing'&&d.state!=='paused');

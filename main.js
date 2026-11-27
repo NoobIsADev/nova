@@ -6,6 +6,7 @@ const {fileURLToPath} = require('node:url');
 const {targetFor, isWebURL, displayAddress, INTERNAL} = require('./lib/navigation');
 const {createUpdateService, signedMacUpdateAvailable} = require('./lib/updater');
 const {hasVisibleBookmarks} = require('./lib/bookmark-bar');
+const {preferredDownloadPanelHeight} = require('./lib/download-panel');
 
 const CHROME_BASE_HEIGHT = 103;
 const BOOKMARK_BAR_HEIGHT = 36;
@@ -14,7 +15,6 @@ const SIDEBAR_WIDTH = 74;
 const MAX_HISTORY = 1200;
 const HOME = 'newtab';
 const DOWNLOAD_PANEL_WIDTH = 382;
-const DOWNLOAD_PANEL_HEIGHT = 408;
 const controllers = new Set();
 let nextTabId = 1;
 const GROUP_COLORS = ['violet','cyan','rose','amber','green','blue'];
@@ -36,12 +36,16 @@ const settingsFile = () => ({settings, bookmarks, history:historyItems, download
 // Screen coordinates are device-independent pixels from Electron's screen API.
 // A small inset avoids accidental detachment at the decorated window edge.
 const {isPointOutsideBounds,detachedWindowBounds} = require('./lib/tab-detach');
-function findWindowForContents(webContents) {
+function findControllerForContents(webContents) {
+  if (!webContents || webContents.isDestroyed()) return null;
   for (const controller of controllers) {
-    if (controller.window?.webContents.id === webContents.id) return controller.window;
-    for (const tab of controller.tabs.values()) if(tab.view.webContents.id===webContents.id)return controller.window;
+    if (controller.window?.webContents.id === webContents.id) return controller;
+    for (const tab of controller.tabs.values()) if (tab.view.webContents.id === webContents.id) return controller;
   }
   return null;
+}
+function findWindowForContents(webContents) {
+  return findControllerForContents(webContents)?.window || null;
 }
 function findChromeController(event) {
   if(event.senderFrame !== event.sender.mainFrame)return null;
@@ -62,8 +66,9 @@ function findInternalTab(event) {
   return null;
 }
 function startNativeDownloadDrag(event, id) {
-  if (!findDownloadsController(event) && !findInternalTab(event))return false;
-  const download=downloads.find(item=>item.id===id);
+  const controller=findDownloadsController(event) || findInternalTab(event)?.controller;
+  if (!controller)return false;
+  const download=downloads.find(item=>item.id===id) || controller.privateDownloads.find(item=>item.id===id);
   if(!download || download.state!=='completed' || !download.path || !path.isAbsolute(download.path))return false;
   let stat;
   try{stat=fs.statSync(download.path);}catch{return false;}
@@ -104,12 +109,20 @@ function publicTab(tab) {
 function publicBookmarks() {
   return bookmarks.map(b=>({url:b.url,title:b.title, favicon:b.favicon||''}));
 }
-function publicDownloads() {
-  return downloads.slice(0, 12).map(d=>({id:d.id,filename:d.filename,received:d.received,total:d.total,state:d.state,time:d.time}));
+function publicDownloads(controller = null) {
+  // Private downloads are transient and visible only in their originating
+  // window. Never store their paths or history in nova-data.json.
+  const rows=controller ? downloads.concat(controller.privateDownloads) : downloads;
+  return rows.slice().sort((a,b)=>b.time-a.time).slice(0,12).map(d=>(
+    {id:d.id,filename:d.filename,received:d.received,total:d.total,state:d.state,time:d.time}
+  ));
 }
 function emitDownloads() {
-  emitState();
-  for (const controller of controllers) controller.emitDownloadPanel();
+  for (const controller of controllers) {
+    controller.repositionDownloadPanel();
+    controller.emitDownloadPanel();
+    controller.emitLocalState();
+  }
 }
 function emitState() {
   for (const controller of controllers) controller.emitLocalState();
@@ -233,10 +246,13 @@ function removeBookmark(raw) {
   if(before===bookmarks.length)return false;
   notifyBookmarksChanged();return true;
 }
-function downloadAction(type, id) {
-  const row = downloads.find(d=>d.id === id);
+function downloadAction(type, id, controller = null) {
+  const row = downloads.find(d=>d.id === id) || controller?.privateDownloads.find(d=>d.id === id);
   if (type === 'clear-downloads') {
     downloads = downloads.filter(d=>d.state==='progressing'||d.state==='paused');
+    if(controller)controller.privateDownloads = controller.privateDownloads.filter(
+      d=>d.state==='progressing'||d.state==='paused'
+    );
     saveSoon();sendInternalUpdate();emitDownloads();return true;
   }
   if (!row) return false;
@@ -251,7 +267,8 @@ function downloadAction(type, id) {
     shell.showItemInFolder(row.path);return true;
   }
   else return false;
-  saveSoon();sendInternalUpdate();emitDownloads();return true;
+  if(!row.private)saveSoon();
+  sendInternalUpdate();emitDownloads();return true;
 }
 function updateSetting(key, value) {
   if (key === 'adblock' && typeof value === 'boolean') return setAdblock(value);
@@ -328,30 +345,45 @@ function setupSession(ses, isPrivate) {
       title:'Website permission', message:`Allow ${origin.hostname} to use ${permission}?`,
       detail:'Only allow sites you trust.'}).then(({response})=>{if(response===1)grants.add(origin.origin+'|'+permission);callback(response===1);}).catch(()=>callback(false));
   });
-  ses.on('will-download', (_event,item) => {
+  ses.on('will-download', (_event,item,originContents) => {
+    // Use the window that started the download, even with several Nova windows
+    // open; do not pop open an unrelated or background window's downloads UI.
+    const owner=findControllerForContents(originContents) ||
+      [...controllers].find(c=>c.window && !c.window.isDestroyed() && c.window.isFocused()) ||
+      [...controllers][0] || null;
     const dest=uniqueDownloadPath(item.getFilename());
     item.setSavePath(dest);
-    const row={id:String(Date.now())+'-'+Math.random().toString(36).slice(2,6),
-      filename:path.basename(dest),path:isPrivate?'':dest,url:isPrivate?'':item.getURL(),
+    const row={id:String(Date.now())+'-'+Math.random().toString(36).slice(2,10),
+      filename:path.basename(dest),path:dest,url:isPrivate?'':item.getURL(),
       received:0,total:item.getTotalBytes(),state:'progressing',time:Date.now(),private:isPrivate};
-    if(!isPrivate){
+    if(isPrivate){
+      // Keep incognito download records in memory only, scoped to the source
+      // window. Completed files can still be dragged from that window's popup.
+      if(owner){owner.privateDownloads.unshift(row);owner.privateDownloads.length=Math.min(100,owner.privateDownloads.length);}
+    }else{
       downloads.unshift(row);downloads=downloads.slice(0,100);saveSoon();
-      activeDownloadItems.set(row.id,item);
     }
+    activeDownloadItems.set(row.id,item);
     let lastUiUpdate=0;
     item.on('updated', () => {
       row.received=item.getReceivedBytes();row.total=item.getTotalBytes();
       row.state=item.isPaused()?'paused':'progressing';
-      if (!isPrivate && Date.now()-lastUiUpdate>=300) {
-        lastUiUpdate=Date.now();emitDownloads();sendInternalUpdate();
+      if (Date.now()-lastUiUpdate>=300) {
+        lastUiUpdate=Date.now();emitDownloads();
+        if(!isPrivate)sendInternalUpdate();
       }
     });
     item.once('done', (_e,state)=>{
-      row.state=state;row.received=item.getReceivedBytes();
-      if(!isPrivate){activeDownloadItems.delete(row.id);saveSoon();emitDownloads();}
-      sendInternalUpdate();
+      row.state=state;row.received=item.getReceivedBytes();activeDownloadItems.delete(row.id);
+      if(!isPrivate)saveSoon();
+      emitDownloads();
+      if(!isPrivate)sendInternalUpdate();
     });
-    sendInternalUpdate();emitDownloads();
+    emitDownloads();
+    if(!isPrivate)sendInternalUpdate();
+    // Open, don't toggle: a second download must never close an open popup.
+    // No focus steal, so typing or media playback on the page can continue.
+    owner?.openDownloadPanel({focus:false});
   });
 }
 
@@ -359,13 +391,16 @@ function createBrowserController(options = {}) {
   let win=null,tabs=new Map(),order=[],activeId=null,groups=new Map(),nextGroupId=1;
   let activeFind=false,downloadPanel=null,downloadPanelOpen=false;
   const controller={
+    privateDownloads:[],
     get window(){return win;},
     get tabs(){return tabs;},
     get downloadPanel(){return downloadPanel;},
     get activeId(){return activeId;},
     snapshot:()=>snapshot(),
     emitLocalState(){if(win && !win.isDestroyed() && !win.webContents.isDestroyed())win.webContents.send('nova:state',snapshot());},
-    emitDownloadPanel(){if(downloadPanelOpen && downloadPanel && !downloadPanel.webContents.isDestroyed())downloadPanel.webContents.send('nova:downloads-update',publicDownloads());},
+    emitDownloadPanel(){if(downloadPanelOpen && downloadPanel && !downloadPanel.webContents.isDestroyed())downloadPanel.webContents.send('nova:downloads-update',publicDownloads(controller));},
+    repositionDownloadPanel:()=>positionDownloadPanel(),
+    openDownloadPanel:(options)=>openDownloadPanel(options),
     reposition(){positionActiveView();positionDownloadPanel();},
     newTab:(...args)=>createTab(...args),
     adoptTab:(tab)=>adoptTab(tab),
@@ -391,7 +426,7 @@ function snapshot() {
     groups:publicGroups(), settings, protection:blockerStatus, protectionError,
     bookmarks:publicBookmarks(), bookmarkedUrls:bookmarks.map(b=>b.url),
     bookmarksBarVisible:hasVisibleBookmarks(settings, bookmarks),
-    windowMaximized:win.isMaximized(), downloads:publicDownloads(), downloadPanelOpen,
+    windowMaximized:win.isMaximized(), downloads:publicDownloads(controller), downloadPanelOpen,
     updates:updateService?.snapshot() || null};
 }
 function positionActiveView() {
@@ -656,7 +691,7 @@ function positionDownloadPanel() {
     x: Math.max(0, w - DOWNLOAD_PANEL_WIDTH - 28),
     y: chromeHeight() - 4,
     width: Math.min(DOWNLOAD_PANEL_WIDTH, w),
-    height: Math.min(DOWNLOAD_PANEL_HEIGHT, Math.max(1,h-chromeHeight()+4))
+    height: Math.min(preferredDownloadPanelHeight(publicDownloads(controller)), Math.max(1,h-chromeHeight()+4))
   });
 }
 function closeDownloadPanel() {
@@ -667,15 +702,19 @@ function closeDownloadPanel() {
   }
   emitState();
 }
-function toggleDownloadPanel() {
-  if (downloadPanelOpen) {closeDownloadPanel();return false;}
-  if (!win || !downloadPanel) return false;
-  downloadPanelOpen = true;
-  win.contentView.addChildView(downloadPanel);
+function openDownloadPanel({focus=true} = {}) {
+  if (!win || win.isDestroyed() || !downloadPanel || downloadPanel.webContents.isDestroyed()) return false;
+  if (!downloadPanelOpen) {
+    downloadPanelOpen = true;
+    win.contentView.addChildView(downloadPanel);
+  }
   positionDownloadPanel();
   emitDownloads();
-  try {downloadPanel.webContents.focus();} catch {}
+  if(focus)try {downloadPanel.webContents.focus();} catch {}
   return true;
+}
+function toggleDownloadPanel() {
+  return downloadPanelOpen ? (closeDownloadPanel(),false) : openDownloadPanel();
 }
 function browserAction(type, payload) {
   const active=tabs.get(activeId);
@@ -714,7 +753,7 @@ function browserAction(type, payload) {
     case 'toggle-download-popover':return toggleDownloadPanel();
     case 'close-download-popover':closeDownloadPanel();return true;
     case 'open-download':case 'show-download':case 'pause-download':case 'resume-download':case 'cancel-download':case 'clear-downloads':
-      return downloadAction(type, payload?.id);
+      return downloadAction(type, payload?.id, controller);
     case 'settings':return updateSetting(payload?.key,payload?.value);
     case 'check-updates':return updateService?.check() ?? false;
     case 'install-update':return false; // Updates install automatically when the browser closes.
@@ -777,7 +816,7 @@ function createWindow(options = {}) {
   win.on('closed',()=>{controllers.delete(controller);downloadPanelOpen=false;
     if(downloadPanel && !downloadPanel.webContents.isDestroyed())downloadPanel.webContents.close();
     downloadPanel=null;win=null;for(const tab of tabs.values()) if(!tab.view.webContents.isDestroyed())tab.view.webContents.close();
-    tabs.clear();groups.clear();order=[];activeId=null;});
+    tabs.clear();groups.clear();order=[];activeId=null;controller.privateDownloads.length=0;});
   win.webContents.on('before-input-event',(e,i)=>keyboard(e,i));
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   win.webContents.on('will-navigate',(event)=>event.preventDefault());
@@ -852,10 +891,10 @@ app.whenReady().then(() => {
     const controller=findDownloadsController(event);
     if(!controller)return null;
     switch(action){
-      case 'list':return publicDownloads();
+      case 'list':return publicDownloads(controller);
       case 'close':controller.closeDownloadPanel();return true;
       case 'open-download':case 'show-download':case 'pause-download':case 'resume-download':case 'cancel-download':case 'clear-downloads':
-        return downloadAction(action,payload?.id);
+        return downloadAction(action,payload?.id,controller);
       case 'all-downloads':controller.closeDownloadPanel();controller.newTab('nova://downloads');return true;
       default:return null;
     }

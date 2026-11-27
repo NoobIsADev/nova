@@ -61,7 +61,9 @@ function mockApp(){
     ipcMain:{},session:{},dialog:{},shell:{},Menu:{},nativeImage:{createFromPath:()=>({isEmpty:()=>false})},clipboard:{},
     screen:{getCursorScreenPoint:()=>mouse.point,getDisplayNearestPoint:()=>({workArea:{x:0,y:0,width:2560,height:1440}})}};
   const originalRequire=createRequire(path.join(root,'main.js'));
-  const context={__dirname:root,require:name=>name==='electron'?electron:originalRequire(name), console, process, Buffer,setTimeout,clearTimeout,URL};
+  const context={__dirname:root,require:name=>name==='electron'?electron:originalRequire(name), console, process, Buffer,URL,
+    // Avoid persisting mocked app data during isolated source tests.
+    setTimeout:()=>1, clearTimeout:()=>{}};
   const source=fs.readFileSync(path.join(root,'main.js'),'utf8');
   vm.runInNewContext(source+`
     settings={adblock:false,accent:'violet',sidebar:false,bookmarkBar:true};

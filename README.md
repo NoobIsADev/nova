@@ -2,18 +2,53 @@
 
 A Chromium-powered Electron desktop browser with a custom dark interface inspired by modern gaming browsers and **DuckDuckGo as the default search engine**.
 
-## Download the Linux AppImage — no building needed
+## Nova 1.4.3 — Adaptive downloads popup and automatic opening
 
-**Linux (x64):** [Download Nova from GitHub Releases](https://github.com/NoobIsADev/nova/releases/tag/v1.4.0). Open **Assets**, select `Nova-Browser-Linux-1.4.0-x64.AppImage`, then on Linux run:
+The **downloads dropdown now adjusts its height** to the number and state of
+recent downloads. One download produces a compact popup; more files gradually
+expand it. Large lists stop growing and scroll inside the panel instead, so the
+popup doesn't take over the whole browser window. It also clamps to small
+window sizes and shrinks again when finished downloads are cleared.
 
-```bash
-chmod +x Nova-Browser-Linux-1.4.0-x64.AppImage
-./Nova-Browser-Linux-1.4.0-x64.AppImage
-```
+**New downloads automatically open the downloads dropdown**, similar to Brave
+and Firefox. It opens in the window where the download started, without
+interrupting the current website or stealing keyboard focus. A second download
+updates the already-open popup instead of closing it. Clicking the toolbar
+Downloads button or pressing Ctrl+J still toggles the dropdown, and Esc closes
+it. **Nova does not automatically execute downloaded files.**
 
-**If the AppImage is not yet listed:** on Windows, run `PUBLISH-APPIMAGE-TO-GITHUB.bat` from the project folder. The script signs you into GitHub (via GitHub CLI), downloads the already-built v1.4.0 AppImage from the successful GitHub Actions Linux job, and uploads the AppImage plus `latest-linux.yml` to GitHub Releases. You do **not** need to compile or build anything to publish it.
+Private downloads appear only in their originating window and are held in
+memory for that window only. Their names/paths are not saved to browser history
+or persisted download records. Completed files remain draggable from the popup.
 
-**For later releases:** `.github/workflows/cross-platform-release.yml` builds an AppImage on Linux automatically whenever you push a new `vX.Y.Z` tag, then publishes the Linux files even if Windows or macOS fails. Upload this updated workflow to GitHub once using `UPLOAD-TO-GITHUB.bat`, then continue using `PUBLISH-RELEASE.bat` with an increased version.
+### Publish v1.4.3
+
+On Windows, extract the complete ZIP and run **`PUBLISH-TO-GITHUB.bat`**.
+It uploads Nova's source and pushes the `v1.4.3` release tag to
+[NoobIsADev/nova](https://github.com/NoobIsADev/nova). GitHub Actions then builds
+Windows, Linux AppImage and macOS packages as configured; you don't need a local
+npm build to publish. You can also test locally with `npm install` and
+`npm start`.
+
+The Node.js integration tests validate the resize logic and download routing;
+manual GUI testing on Windows/Linux/macOS is still recommended before a public
+rollout.
+
+## Prebuilt downloads — no building required
+
+Visit **[Nova Browser GitHub Releases](https://github.com/NoobIsADev/nova/releases/latest)**
+and download the latest release asset for your operating system:
+
+- **Linux x64:** `Nova-Browser-Linux-<version>-x64.AppImage`. Make it executable
+  (`chmod +x Nova-Browser-Linux-*.AppImage`) and launch the AppImage.
+- **Windows:** `Nova-Browser-Setup-<version>-x64.exe` (recommended for automatic
+  updates) or the Portable EXE (manual updates).
+- **macOS:** a DMG when the macOS release build succeeds. macOS auto-updating
+  still requires developer signing as explained below.
+
+New releases are produced by the repository's GitHub Actions workflow after
+`PUBLISH-TO-GITHUB.bat` pushes the version tag. Users do **not** need Node.js,
+npm or a local build to run these release downloads.
 
 ## Nova 1.4.1 — one-click GitHub release with ready-made AppImage
 
