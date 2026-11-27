@@ -34,6 +34,10 @@ function draw(items){
   $('#clear').disabled=!list.some(d=>d.state!=='progressing'&&d.state!=='paused');
   for(const d of list){
     const row=el('div','entry');row.setAttribute('role','listitem');
+    if(d.state==='completed'){
+      row.draggable=true;row.classList.add('can-drag');row.title='Drag this file onto your Desktop or into a folder';
+      row.addEventListener('dragstart',e=>{e.preventDefault();api.startDownloadDrag(d.id);});
+    }
     const icon=el('div','file-icon');icon.innerHTML=I(d.state==='completed'?'check':'download',18);row.append(icon);
     const body=el('div','file-details');body.append(el('div','file-name',d.filename||'Unknown file'));
     let desc='';

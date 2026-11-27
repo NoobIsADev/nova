@@ -7,20 +7,27 @@ const path=require('node:path');
 const {createRequire}=require('node:module');
 const project=path.resolve(__dirname,'..');
 function harness(){
-  const requireFromMain=createRequire(path.join(project,'main.js'));
-  const app={on(){},whenReady(){return {then(){}}}};
-  const context={
-    require(name){if(name==='electron')return {app};return requireFromMain(name);},
-    console,process,Buffer,setTimeout,clearTimeout,URL
-  };
+  // Group operations are scoped to each browser window in Nova 1.4.2.
+  // Exercise the real helpers with a minimal window-state sandbox.
   const source=fs.readFileSync(path.join(project,'main.js'),'utf8');
-  vm.runInNewContext(source+`\nglobalThis.__test={
-    init(ids){tabs=new Map(ids.map(id=>[id,{id,groupId:null}]));order=[...ids];groups=new Map();nextGroupId=1;activeId=null;},
-    order(){return [...order];},
-    entries(){return order.map(id=>({id,groupId:tabs.get(id)?.groupId||null}));},
-    groups(){return publicGroups().map(g=>({...g}));},
-    createGroup,addToGroup,groupWithTab,ungroupTab,reorderTab,renameGroup,colorGroup,toggleGroup,ungroupAll
-  }`,context,{filename:'main.js'});
+  const select=(begin,end)=>source.slice(source.indexOf(begin),source.indexOf(end,source.indexOf(begin)));
+  const funcs=[select('function cleanGroupName(', 'function removeBookmark('),
+    select('function publicGroups(', 'function snapshot('),
+    select('function createGroup(', 'function showTabMenu(')].join('\n');
+  const context={console,process};
+  vm.runInNewContext(`
+    let tabs,order,groups,nextGroupId,activeId;
+    const GROUP_COLORS=['violet','cyan','rose','amber','green','blue'];
+    function emitState(){}
+    function selectTab(){}
+    ${funcs}
+    globalThis.__test={
+      init(ids){tabs=new Map(ids.map(id=>[id,{id,groupId:null}]));order=[...ids];groups=new Map();nextGroupId=1;activeId=null;},
+      order(){return [...order];},
+      entries(){return order.map(id=>({id,groupId:tabs.get(id)?.groupId||null}));},
+      groups(){return publicGroups().map(g=>({...g}));},
+      createGroup,addToGroup,groupWithTab,ungroupTab,reorderTab,renameGroup,colorGroup,toggleGroup,ungroupAll
+    }`,context,{filename:'groups.js'});
   return context.__test;
 }
 test('grouping two tabs places both together',()=>{

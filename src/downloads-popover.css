@@ -13,3 +13,8 @@ button{font:inherit;cursor:pointer}button:focus-visible{outline:2px solid var(--
 .actions{display:flex;gap:3px;align-items:center;flex-shrink:0}.mini{border:0;color:#9ca1ba;background:transparent;height:29px;min-width:29px;display:grid;place-items:center;border-radius:8px;padding:0}
 .empty{color:#8189a8;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;text-align:center;gap:10px;padding:34px}.empty svg{color:#ac8bff;opacity:.7}.empty h3{margin:0;color:#e5e6f6;font-size:14px}.empty p{margin:0;font-size:12px;line-height:1.7}
 .panel-foot{flex-shrink:0;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;border-top:1px solid #33374b;background:#1c1e2e}.text-button{border:0;border-radius:7px;background:none;color:#c7aeff;font-size:12px;font-weight:680;padding:7px;display:inline-flex;align-items:center;gap:6px}.text-button:hover{background:#333044}.text-button.subtle{color:#8c92ae;font-weight:500}
+
+/* Completed downloads can be dragged onto Desktop, Finder or a file manager. */
+.entry.can-drag{cursor:grab;user-select:none}
+.entry.can-drag:active{cursor:grabbing}
+.entry.can-drag:hover .file-name{color:#ffffff}

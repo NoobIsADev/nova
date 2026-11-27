@@ -1,7 +1,7 @@
 {
   "name": "nova-browser",
   "productName": "Nova Browser",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "A modern, DuckDuckGo-first Chromium desktop browser with built-in ad and tracker blocking.",
   "private": true,
   "author": "Nova Browser",
@@ -10,7 +10,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
-    "check": "node --check main.js && node --check preload.js && node --check internal-preload.js && node --check src/chrome.js && node --check src/internal.js && node --check src/icons.js && node --check lib/updater.js && node --check tools/prepare-update-policy.js && node --check downloads-preload.js && node --check src/downloads-popover.js && node --check tools/prepare-logo.js && node --test test/*.test.js",
+    "check": "node --check main.js && node --check lib/tab-detach.js && node --check preload.js && node --check internal-preload.js && node --check src/chrome.js && node --check src/internal.js && node --check src/icons.js && node --check lib/updater.js && node --check tools/prepare-update-policy.js && node --check downloads-preload.js && node --check src/downloads-popover.js && node --check tools/prepare-logo.js && node --test test/*.test.js",
     "pack": "electron-builder --dir",
     "build": "electron-builder --publish never",
     "build:win": "electron-builder --win nsis portable --x64 --publish never",
@@ -51,7 +51,8 @@
       "tools/**/*",
       "build/logo.png",
       "build/icon.png",
-      "build/icon.ico"
+      "build/icon.ico",
+      "build/drag-icon.png"
     ],
     "win": {
       "icon": "build/icon.ico",

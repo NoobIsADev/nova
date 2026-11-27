@@ -128,7 +128,12 @@ function downloadPage(){
   header.append(makeButton('Clear list','outline-btn',()=>actions.action('clear-downloads').then(update),'trash'));
   const entries=el('div','entries');root.append(entries);
   if(!state.downloads?.length)return blankState(entries,'download','No downloads yet','Downloaded files will appear here.');
-  for(const item of state.downloads){const row=el('div','entry');const icon=el('div','entry-icon');icon.innerHTML=I('download',18);row.append(icon);
+  for(const item of state.downloads){const row=el('div','entry');
+    if(item.state==='completed' && item.path){
+      row.draggable=true;row.title='Drag this file onto your Desktop or into a folder';
+      row.addEventListener('dragstart',e=>{e.preventDefault();actions.startDownloadDrag(item.id);});
+    }
+    const icon=el('div','entry-icon');icon.innerHTML=I('download',18);row.append(icon);
     const body=el('div','entry-body');body.append(el('div','entry-main',item.filename));
     body.append(el('div','entry-sub',item.state==='progressing'?`${bytes(item.received)} of ${bytes(item.total)}`:`${item.state} · ${bytes(item.received)}`));row.append(body);
     row.append(el('div','entry-meta',new Date(item.time).toLocaleDateString()));

@@ -1,5 +1,5 @@
 'use strict';
-const {app, BrowserWindow, WebContentsView, ipcMain, session, dialog, shell, Menu, nativeImage, clipboard} = require('electron');
+const {app, BrowserWindow, WebContentsView, ipcMain, session, dialog, shell, Menu, nativeImage, clipboard, screen} = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const {fileURLToPath} = require('node:url');
@@ -15,13 +15,8 @@ const MAX_HISTORY = 1200;
 const HOME = 'newtab';
 const DOWNLOAD_PANEL_WIDTH = 382;
 const DOWNLOAD_PANEL_HEIGHT = 408;
-let win = null;
-let tabs = new Map();
-let order = [];
-let activeId = null;
+const controllers = new Set();
 let nextTabId = 1;
-let groups = new Map();
-let nextGroupId = 1;
 const GROUP_COLORS = ['violet','cyan','rose','amber','green','blue'];
 let normalSession, privateSession;
 let blocker = null;
@@ -29,9 +24,6 @@ let blockerStatus = 'loading';
 let protectionError = '';
 let settings, bookmarks, historyItems, downloads;
 let writeTimer = null;
-let activeFind = false;
-let downloadPanel = null;
-let downloadPanelOpen = false;
 let updateService = null;
 const activeDownloadItems = new Map();
 
@@ -40,6 +32,50 @@ const dataFile = () => path.join(app.getPath('userData'), 'nova-data.json');
 const blockerCacheFile = () => path.join(app.getPath('userData'), 'filters-cache.bin');
 const settingsFile = () => ({settings, bookmarks, history:historyItems, downloads:downloads.slice(0, 100)});
 
+
+// Screen coordinates are device-independent pixels from Electron's screen API.
+// A small inset avoids accidental detachment at the decorated window edge.
+const {isPointOutsideBounds,detachedWindowBounds} = require('./lib/tab-detach');
+function findWindowForContents(webContents) {
+  for (const controller of controllers) {
+    if (controller.window?.webContents.id === webContents.id) return controller.window;
+    for (const tab of controller.tabs.values()) if(tab.view.webContents.id===webContents.id)return controller.window;
+  }
+  return null;
+}
+function findChromeController(event) {
+  if(event.senderFrame !== event.sender.mainFrame)return null;
+  for(const controller of controllers)if(controller.window && !controller.window.isDestroyed() &&
+    controller.window.webContents.id===event.sender.id)return controller;
+  return null;
+}
+function findDownloadsController(event) {
+  if(event.senderFrame !== event.sender.mainFrame || !event.sender.getURL().startsWith('file://'))return null;
+  for(const controller of controllers)if(controller.downloadPanel?.webContents.id===event.sender.id)return controller;
+  return null;
+}
+function findInternalTab(event) {
+  for (const controller of controllers) {
+    const tab=controller.checkInternalSender(event);
+    if(tab)return {controller,tab};
+  }
+  return null;
+}
+function startNativeDownloadDrag(event, id) {
+  if (!findDownloadsController(event) && !findInternalTab(event))return false;
+  const download=downloads.find(item=>item.id===id);
+  if(!download || download.state!=='completed' || !download.path || !path.isAbsolute(download.path))return false;
+  let stat;
+  try{stat=fs.statSync(download.path);}catch{return false;}
+  if(!stat.isFile())return false;
+  const iconPath=path.join(__dirname,'build','drag-icon.png');
+  let icon=nativeImage.createFromPath(iconPath);
+  if(icon.isEmpty())icon=nativeImage.createFromPath(path.join(__dirname,'build','icon.png'));
+  if(icon.isEmpty())return false;
+  // A synchronous IPC call within the renderer dragstart handler is required.
+  event.sender.startDrag({file:download.path,icon});
+  return true;
+}
 function loadData() {
   let raw = {};
   try {raw = JSON.parse(fs.readFileSync(dataFile(), 'utf8'));} catch {}
@@ -65,35 +101,21 @@ function publicTab(tab) {
     canGoForward:!tab.view.webContents.isDestroyed() && tab.view.webContents.canGoForward(),
     private:tab.private, kind:tab.kind, page:tab.page, muted:tab.muted, playing:tab.playing, groupId:tab.groupId || null};
 }
-function publicGroups() {
-  return [...groups.values()].filter(g=>order.some(id=>tabs.get(id)?.groupId===g.id)).map(g=>({...g}));
-}
 function publicBookmarks() {
   return bookmarks.map(b=>({url:b.url,title:b.title, favicon:b.favicon||''}));
-}
-function snapshot() {
-  return {tabs:order.map(id=>tabs.get(id)).filter(Boolean).map(publicTab), activeId,
-    groups:publicGroups(), settings, protection:blockerStatus, protectionError,
-    bookmarks:publicBookmarks(), bookmarkedUrls:bookmarks.map(b=>b.url),
-    bookmarksBarVisible:hasVisibleBookmarks(settings, bookmarks),
-    windowMaximized:win.isMaximized(), downloads:publicDownloads(), downloadPanelOpen,
-    updates:updateService?.snapshot() || null};
 }
 function publicDownloads() {
   return downloads.slice(0, 12).map(d=>({id:d.id,filename:d.filename,received:d.received,total:d.total,state:d.state,time:d.time}));
 }
 function emitDownloads() {
   emitState();
-  if (downloadPanelOpen && downloadPanel && !downloadPanel.webContents.isDestroyed()) {
-    downloadPanel.webContents.send('nova:downloads-update', publicDownloads());
-  }
+  for (const controller of controllers) controller.emitDownloadPanel();
 }
 function emitState() {
-  if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
-  win.webContents.send('nova:state', snapshot());
+  for (const controller of controllers) controller.emitLocalState();
 }
 function sendInternalUpdate() {
-  for (const tab of tabs.values()) {
+  for (const controller of controllers) for (const tab of controller.tabs.values()) {
     if (tab.kind === 'internal' && !tab.view.webContents.isDestroyed()) tab.view.webContents.send('nova:data-updated');
   }
 }
@@ -107,28 +129,6 @@ function recordHistory(tab) {
     historyItems = historyItems.slice(0, MAX_HISTORY);
   }
   saveSoon(); sendInternalUpdate();
-}
-function positionActiveView() {
-  if (!win || win.isDestroyed()) return;
-  const tab = tabs.get(activeId);
-  if (!tab) return;
-  const [w, h] = win.getContentSize();
-  const y = chromeHeight();
-  const x = settings.sidebar && tab.kind === 'internal' && tab.page === HOME ? SIDEBAR_WIDTH : 0;
-  tab.view.setBounds({x, y, width:Math.max(1, w - x), height:Math.max(1, h-y)});
-}
-function selectTab(id) {
-  const tab = tabs.get(Number(id)); if (!tab || !win) return;
-  closeDownloadPanel();
-  if (tab.groupId && groups.get(tab.groupId)?.collapsed) groups.get(tab.groupId).collapsed=false;
-  const previous = tabs.get(activeId);
-  if (previous && previous.id !== tab.id) win.contentView.removeChildView(previous.view);
-  activeId = tab.id;
-  win.contentView.addChildView(tab.view);
-  positionActiveView();
-  emitState();
-  if (!win.isFocused()) win.focus();
-  try {tab.view.webContents.focus();} catch {}
 }
 function normalizeTitle(value) {return String(value || '').trim().slice(0, 140) || 'New Tab';}
 function pageFile() {return path.join(__dirname, 'src', 'internal.html');}
@@ -173,6 +173,249 @@ function internalPageForURL(url) {
     return INTERNAL.has(page) ? page : HOME;
   } catch {return null;}
 }
+function setupTabEvents(tab) {
+  const wc = tab.view.webContents;
+  wc.on('context-menu',(_event, params) => {
+    const owner=tab.owner, menu=[];
+    if (params.linkURL && isWebURL(params.linkURL)) menu.push({label:'Open link in new tab',click:()=>tab.owner.newTab(params.linkURL,{private:tab.private})});
+    if (params.selectionText) menu.push({label:'Copy selection',click:()=>wc.copy()});
+    if (params.isEditable) {
+      menu.push({label:'Cut',enabled:params.editFlags.canCut,click:()=>wc.cut()});
+      menu.push({label:'Copy',enabled:params.editFlags.canCopy,click:()=>wc.copy()});
+      menu.push({label:'Paste',enabled:params.editFlags.canPaste,click:()=>wc.paste()});
+      menu.push({label:'Select all',click:()=>wc.selectAll()});
+    }
+    if (menu.length) menu.push({type:'separator'});
+    menu.push({label:'Back',enabled:wc.canGoBack(),click:()=>wc.goBack()});
+    menu.push({label:'Reload page',click:()=>wc.reload()});
+    const window=owner?.window;
+    if (menu.length && window && !window.isDestroyed()) Menu.buildFromTemplate(menu).popup({window});
+  });
+  wc.on('page-title-updated', (_event, title) => {
+    tab.title = normalizeTitle(title);
+    if (!tab.private && tab.kind === 'web' && historyItems.length && historyItems[0].url === tab.url) {
+      historyItems[0].title = tab.title; saveSoon(); sendInternalUpdate();
+    }
+    emitState();
+  });
+  wc.on('page-favicon-updated', (_event, urls) => {
+    tab.favicon = (urls || []).find(u => /^https?:\/\//.test(u)) || '';
+    emitState();
+  });
+  wc.on('did-start-loading', () => {tab.loading=true;emitState();});
+  wc.on('did-stop-loading', () => {tab.loading=false;emitState();});
+  wc.on('did-navigate', (_event, url) => tab.owner.syncNavigation(tab,url));
+  wc.on('did-navigate-in-page', (_event, url, isMainFrame) => {
+    if (isMainFrame) tab.owner.syncNavigation(tab,url);
+  });
+  wc.on('did-finish-load', () => {if (tab.kind === 'web') injectYouTubeHelper(tab);});
+  wc.on('media-started-playing', () => {tab.playing=true;emitState();});
+  wc.on('media-paused', () => {tab.playing=false;emitState();});
+  wc.on('render-process-gone', () => {tab.loading=false;emitState();});
+  wc.on('will-navigate', (event, url) => {
+    if (!isWebURL(url) && !internalPageForURL(url)) event.preventDefault();
+  });
+  wc.setWindowOpenHandler(({url, disposition}) => {
+    if (isWebURL(url)) tab.owner.newTab(url, {background: disposition === 'background-tab', private:tab.private});
+    return {action:'deny'};
+  });
+  wc.on('before-input-event', (event, input) => tab.owner.keyboard(event,input,tab));
+}
+// Bookmarks are shared across all windows, including their native webview heights.
+function notifyBookmarksChanged() {
+  for (const controller of controllers) controller.reposition();
+  saveSoon(); sendInternalUpdate(); emitState();
+}
+function cleanGroupName(raw) {return String(raw||'').trim().slice(0,36)||'Group';}
+function removeBookmark(raw) {
+  const url=String(raw||'');const before=bookmarks.length;
+  bookmarks=bookmarks.filter(b=>b.url!==url);
+  if(before===bookmarks.length)return false;
+  notifyBookmarksChanged();return true;
+}
+function downloadAction(type, id) {
+  const row = downloads.find(d=>d.id === id);
+  if (type === 'clear-downloads') {
+    downloads = downloads.filter(d=>d.state==='progressing'||d.state==='paused');
+    saveSoon();sendInternalUpdate();emitDownloads();return true;
+  }
+  if (!row) return false;
+  const item = activeDownloadItems.get(id);
+  if (type==='pause-download' && item && !item.isPaused()) {item.pause();row.state='paused';}
+  else if (type==='resume-download' && item && item.isPaused()) {item.resume();row.state='progressing';}
+  else if (type==='cancel-download' && item) {item.cancel();row.state='cancelled';}
+  else if (type==='open-download' && row.state==='completed' && row.path && fs.existsSync(row.path)) {
+    shell.openPath(row.path).catch(console.error);return true;
+  }
+  else if (type==='show-download' && row.path && fs.existsSync(row.path)) {
+    shell.showItemInFolder(row.path);return true;
+  }
+  else return false;
+  saveSoon();sendInternalUpdate();emitDownloads();return true;
+}
+function updateSetting(key, value) {
+  if (key === 'adblock' && typeof value === 'boolean') return setAdblock(value);
+  if (key === 'sidebar' && typeof value === 'boolean') settings.sidebar=value;
+  else if (key === 'bookmarkBar' && typeof value === 'boolean') settings.bookmarkBar=value;
+  else if (key === 'accent' && ['violet','red','cyan','emerald'].includes(value)) settings.accent=value;
+  else return false;
+  for (const controller of controllers) controller.reposition();
+  saveSoon();emitState();sendInternalUpdate();return true;
+}
+function setAdblock(value) {
+  settings.adblock=Boolean(value);
+  if(blocker){
+    for (const ses of [normalSession,privateSession]) {
+      try {blocker.disableBlockingInSession(ses);} catch {}
+      if(settings.adblock) try {blocker.enableBlockingInSession(ses);} catch (err) {console.error(err);}
+    }
+  }
+  if(!settings.adblock) {
+    for(const controller of controllers)for(const tab of controller.tabs.values()) if(!tab.view.webContents.isDestroyed() && tab.kind==='web') {
+      tab.view.webContents.executeJavaScript('window.__novaYT?.stop?.()').catch(()=>{});
+    }
+  } else {
+    for(const controller of controllers)for(const tab of controller.tabs.values()) injectYouTubeHelper(tab);
+  }
+  saveSoon();emitState();sendInternalUpdate();return settings.adblock;
+}
+async function initAdblock(forceRefresh=false) {
+  try {
+    const {ElectronBlocker}=require('@ghostery/adblocker-electron');
+    if(!blocker){
+      // Start with bundled offline fallback until richer lists are available.
+      blocker=ElectronBlocker.parse(fs.readFileSync(path.join(__dirname,'src','filters-fallback.txt'),'utf8'));
+      if(settings.adblock)for(const s of [normalSession,privateSession]) blocker.enableBlockingInSession(s);
+      blockerStatus='basic';emitState();
+    }
+    if(forceRefresh) try{fs.unlinkSync(blockerCacheFile());}catch{}
+    const full=await ElectronBlocker.fromPrebuiltAdsAndTracking(fetch, {
+      path:blockerCacheFile(),read:fs.promises.readFile,write:fs.promises.writeFile
+    });
+    const old=blocker;
+    for(const s of [normalSession,privateSession]) try {old.disableBlockingInSession(s);}catch{}
+    blocker=full;
+    if(settings.adblock)for(const s of [normalSession,privateSession]) blocker.enableBlockingInSession(s);
+    blockerStatus='full';protectionError='';emitState();sendInternalUpdate();
+    return true;
+  } catch(err) {
+    console.warn('Full ad lists unavailable; using bundled protection:',err.message);
+    protectionError='Could not refresh full lists. Basic offline rules are still available.';
+    blockerStatus=blocker?'basic':'error';emitState();sendInternalUpdate();
+    return false;
+  }
+}
+function uniqueDownloadPath(filename) {
+  const base=app.getPath('downloads');
+  const cleaned=path.basename(filename).replace(/[<>:"/\\|?*\x00-\x1f]/g,'_') || 'download';
+  const ext=path.extname(cleaned), stem=path.basename(cleaned,ext);
+  let candidate=path.join(base,cleaned),i=1;
+  while(fs.existsSync(candidate) && i<9999) candidate=path.join(base,`${stem} (${i++})${ext}`);
+  return candidate;
+}
+function setupSession(ses, isPrivate) {
+  // Prevent sites from rejecting the Electron-specific user agent token.
+  ses.setUserAgent(ses.getUserAgent().replace(/\sElectron\/[\d.]+/g, ''));
+  const grants=new Set();
+  ses.setPermissionCheckHandler((_wc,permission,origin)=>grants.has(String(origin)+'|'+permission));
+  ses.setPermissionRequestHandler((wc,permission,callback,details) => {
+    const allowed=new Set(['media','notifications','geolocation']);
+    if(!allowed.has(permission) || !wc || wc.isDestroyed()) return callback(false);
+    let origin;
+    try{const raw=details?.requestingUrl || wc.getURL();origin=new URL(raw);if(origin.protocol!=='https:' && origin.hostname!=='localhost')return callback(false);}
+    catch{return callback(false);}
+    dialog.showMessageBox(findWindowForContents(wc) || BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0],{type:'question',buttons:['Block','Allow'],defaultId:0,cancelId:0,
+      title:'Website permission', message:`Allow ${origin.hostname} to use ${permission}?`,
+      detail:'Only allow sites you trust.'}).then(({response})=>{if(response===1)grants.add(origin.origin+'|'+permission);callback(response===1);}).catch(()=>callback(false));
+  });
+  ses.on('will-download', (_event,item) => {
+    const dest=uniqueDownloadPath(item.getFilename());
+    item.setSavePath(dest);
+    const row={id:String(Date.now())+'-'+Math.random().toString(36).slice(2,6),
+      filename:path.basename(dest),path:isPrivate?'':dest,url:isPrivate?'':item.getURL(),
+      received:0,total:item.getTotalBytes(),state:'progressing',time:Date.now(),private:isPrivate};
+    if(!isPrivate){
+      downloads.unshift(row);downloads=downloads.slice(0,100);saveSoon();
+      activeDownloadItems.set(row.id,item);
+    }
+    let lastUiUpdate=0;
+    item.on('updated', () => {
+      row.received=item.getReceivedBytes();row.total=item.getTotalBytes();
+      row.state=item.isPaused()?'paused':'progressing';
+      if (!isPrivate && Date.now()-lastUiUpdate>=300) {
+        lastUiUpdate=Date.now();emitDownloads();sendInternalUpdate();
+      }
+    });
+    item.once('done', (_e,state)=>{
+      row.state=state;row.received=item.getReceivedBytes();
+      if(!isPrivate){activeDownloadItems.delete(row.id);saveSoon();emitDownloads();}
+      sendInternalUpdate();
+    });
+    sendInternalUpdate();emitDownloads();
+  });
+}
+
+function createBrowserController(options = {}) {
+  let win=null,tabs=new Map(),order=[],activeId=null,groups=new Map(),nextGroupId=1;
+  let activeFind=false,downloadPanel=null,downloadPanelOpen=false;
+  const controller={
+    get window(){return win;},
+    get tabs(){return tabs;},
+    get downloadPanel(){return downloadPanel;},
+    get activeId(){return activeId;},
+    snapshot:()=>snapshot(),
+    emitLocalState(){if(win && !win.isDestroyed() && !win.webContents.isDestroyed())win.webContents.send('nova:state',snapshot());},
+    emitDownloadPanel(){if(downloadPanelOpen && downloadPanel && !downloadPanel.webContents.isDestroyed())downloadPanel.webContents.send('nova:downloads-update',publicDownloads());},
+    reposition(){positionActiveView();positionDownloadPanel();},
+    newTab:(...args)=>createTab(...args),
+    adoptTab:(tab)=>adoptTab(tab),
+    syncNavigation:(...args)=>syncNavigation(...args),
+    keyboard:(...args)=>keyboard(...args),
+    action:(...args)=>browserAction(...args),
+    toggleDownloadPanel:()=>toggleDownloadPanel(),
+    closeDownloadPanel:()=>closeDownloadPanel(),
+    checkInternalSender:(event)=>checkInternalSender(event),
+    navigate:(...args)=>navigate(...args),
+    closeTab:(id)=>closeTab(id),
+    detachTab:(id,force)=>detachTab(id,force)
+  };
+  controllers.add(controller);
+  createWindow(options);
+  return controller;
+
+function publicGroups() {
+  return [...groups.values()].filter(g=>order.some(id=>tabs.get(id)?.groupId===g.id)).map(g=>({...g}));
+}
+function snapshot() {
+  return {tabs:order.map(id=>tabs.get(id)).filter(Boolean).map(publicTab), activeId,
+    groups:publicGroups(), settings, protection:blockerStatus, protectionError,
+    bookmarks:publicBookmarks(), bookmarkedUrls:bookmarks.map(b=>b.url),
+    bookmarksBarVisible:hasVisibleBookmarks(settings, bookmarks),
+    windowMaximized:win.isMaximized(), downloads:publicDownloads(), downloadPanelOpen,
+    updates:updateService?.snapshot() || null};
+}
+function positionActiveView() {
+  if (!win || win.isDestroyed()) return;
+  const tab = tabs.get(activeId);
+  if (!tab) return;
+  const [w, h] = win.getContentSize();
+  const y = chromeHeight();
+  const x = settings.sidebar && tab.kind === 'internal' && tab.page === HOME ? SIDEBAR_WIDTH : 0;
+  tab.view.setBounds({x, y, width:Math.max(1, w - x), height:Math.max(1, h-y)});
+}
+function selectTab(id) {
+  const tab = tabs.get(Number(id)); if (!tab || !win) return;
+  closeDownloadPanel();
+  if (tab.groupId && groups.get(tab.groupId)?.collapsed) groups.get(tab.groupId).collapsed=false;
+  const previous = tabs.get(activeId);
+  if (previous && previous.id !== tab.id) win.contentView.removeChildView(previous.view);
+  activeId = tab.id;
+  win.contentView.addChildView(tab.view);
+  positionActiveView();
+  emitState();
+  if (!win.isFocused()) win.focus();
+  try {tab.view.webContents.focus();} catch {}
+}
 function syncNavigation(tab, url) {
   if (isWebURL(url)) {
     const changed=tab.url !== url || tab.kind !== 'web';
@@ -192,55 +435,6 @@ function syncNavigation(tab, url) {
   if (tab.id === activeId) positionActiveView();
   emitState();
 }
-function setupTabEvents(tab) {
-  const wc = tab.view.webContents;
-  wc.on('context-menu',(_event, params) => {
-    const menu=[];
-    if (params.linkURL && isWebURL(params.linkURL)) menu.push({label:'Open link in new tab',click:()=>createTab(params.linkURL,{private:tab.private})});
-    if (params.selectionText) menu.push({label:'Copy selection',click:()=>wc.copy()});
-    if (params.isEditable) {
-      menu.push({label:'Cut',enabled:params.editFlags.canCut,click:()=>wc.cut()});
-      menu.push({label:'Copy',enabled:params.editFlags.canCopy,click:()=>wc.copy()});
-      menu.push({label:'Paste',enabled:params.editFlags.canPaste,click:()=>wc.paste()});
-      menu.push({label:'Select all',click:()=>wc.selectAll()});
-    }
-    if (menu.length) menu.push({type:'separator'});
-    menu.push({label:'Back',enabled:wc.canGoBack(),click:()=>wc.goBack()});
-    menu.push({label:'Reload page',click:()=>wc.reload()});
-    if (menu.length && win) Menu.buildFromTemplate(menu).popup({window:win});
-  });
-  wc.on('page-title-updated', (_event, title) => {
-    tab.title = normalizeTitle(title);
-    if (!tab.private && tab.kind === 'web' && historyItems.length && historyItems[0].url === tab.url) {
-      historyItems[0].title = tab.title; saveSoon(); sendInternalUpdate();
-    }
-    emitState();
-  });
-  wc.on('page-favicon-updated', (_event, urls) => {
-    tab.favicon = (urls || []).find(u => /^https?:\/\//.test(u)) || '';
-    emitState();
-  });
-  wc.on('did-start-loading', () => {tab.loading=true;emitState();});
-  wc.on('did-stop-loading', () => {tab.loading=false;emitState();});
-  wc.on('did-navigate', (_event, url) => syncNavigation(tab,url));
-  wc.on('did-navigate-in-page', (_event, url, isMainFrame) => {
-    if (isMainFrame) syncNavigation(tab,url);
-  });
-  wc.on('did-finish-load', () => {
-    if (tab.kind === 'web') injectYouTubeHelper(tab);
-  });
-  wc.on('media-started-playing', () => {tab.playing=true;emitState();});
-  wc.on('media-paused', () => {tab.playing=false;emitState();});
-  wc.on('render-process-gone', () => {tab.loading=false;emitState();});
-  wc.on('will-navigate', (event, url) => {
-    if (!isWebURL(url) && !internalPageForURL(url)) event.preventDefault();
-  });
-  wc.setWindowOpenHandler(({url, disposition}) => {
-    if (isWebURL(url)) createTab(url, {background: disposition === 'background-tab', private:tab.private});
-    return {action:'deny'};
-  });
-  wc.on('before-input-event', (event, input) => keyboard(event,input,tab));
-}
 function createTab(initial = 'nova://newtab', opts = {}) {
   if (tabs.size >= 40) return null;
   const privateTab = Boolean(opts.private);
@@ -254,7 +448,7 @@ function createTab(initial = 'nova://newtab', opts = {}) {
     preload:path.join(__dirname, 'internal-preload.js')
   }});
   view.setBackgroundColor('#10111c');
-  const tab = {id, view, private:privateTab, kind:target.kind, page:target.page || HOME,
+  const tab = {id, view, owner:controller, private:privateTab, kind:target.kind, page:target.page || HOME,
     url:target.url || '', title:target.kind === 'internal' ? ({newtab:'New Tab', settings:'Settings',history:'History', downloads:'Downloads'}[target.page] || 'New Tab') : 'New Tab',
     favicon:'',loading:false,muted:false,playing:false,groupId:group?.id||null};
   tabs.set(id,tab);
@@ -306,13 +500,6 @@ function moveTab(delta) {
   selectTab(order[(index + delta + order.length)%order.length]);
 }
 // Recompute the native webview bounds when the bar appears or disappears.
-function notifyBookmarksChanged() {
-  positionActiveView();
-  positionDownloadPanel();
-  saveSoon();
-  sendInternalUpdate();
-  emitState();
-}
 function bookmarkCurrent() {
   const tab=tabs.get(activeId); if(!tab || !isWebURL(tab.url)) return false;
   const existing=bookmarks.findIndex(b=>b.url===tab.url);
@@ -322,7 +509,6 @@ function bookmarkCurrent() {
   return existing<0;
 }
 // Tab islands: groups are session-scoped because tabs themselves are not restored on launch.
-function cleanGroupName(raw) {return String(raw||'').trim().slice(0,36)||'Group';}
 function createGroup(tabId) {
   const tab=tabs.get(Number(tabId));if(!tab)return null;
   const oldId=tab.groupId;
@@ -430,6 +616,7 @@ function showTabMenu(tabId) {
     {label:'Add tab to group',submenu:groupChoices},
     ...(tab.groupId?[{label:'Remove from group',click:()=>ungroupTab(tab.id)}]:[]),
     {type:'separator'},
+    {label:'Move tab to new window',click:()=>detachTab(tab.id,true)},
     {label:'Close tab',click:()=>closeTab(tab.id)}
   ];
   Menu.buildFromTemplate(tpl).popup({window:win});return true;
@@ -446,12 +633,6 @@ function showGroupMenu(groupId) {
     {label:'Close group',click:()=>closeGroup(group.id)}
   ];
   Menu.buildFromTemplate(tpl).popup({window:win});return true;
-}
-function removeBookmark(raw) {
-  const url=String(raw||'');const before=bookmarks.length;
-  bookmarks=bookmarks.filter(b=>b.url!==url);
-  if(before===bookmarks.length)return false;
-  notifyBookmarksChanged();return true;
 }
 function showBookmarkMenu(url) {
   const bookmark=bookmarks.find(b=>b.url===url);if(!bookmark||!win)return false;
@@ -496,32 +677,13 @@ function toggleDownloadPanel() {
   try {downloadPanel.webContents.focus();} catch {}
   return true;
 }
-function downloadAction(type, id) {
-  const row = downloads.find(d=>d.id === id);
-  if (type === 'clear-downloads') {
-    downloads = downloads.filter(d=>d.state==='progressing'||d.state==='paused');
-    saveSoon();sendInternalUpdate();emitDownloads();return true;
-  }
-  if (!row) return false;
-  const item = activeDownloadItems.get(id);
-  if (type==='pause-download' && item && !item.isPaused()) {item.pause();row.state='paused';}
-  else if (type==='resume-download' && item && item.isPaused()) {item.resume();row.state='progressing';}
-  else if (type==='cancel-download' && item) {item.cancel();row.state='cancelled';}
-  else if (type==='open-download' && row.state==='completed' && row.path && fs.existsSync(row.path)) {
-    shell.openPath(row.path).catch(console.error);return true;
-  }
-  else if (type==='show-download' && row.path && fs.existsSync(row.path)) {
-    shell.showItemInFolder(row.path);return true;
-  }
-  else return false;
-  saveSoon();sendInternalUpdate();emitDownloads();return true;
-}
 function browserAction(type, payload) {
   const active=tabs.get(activeId);
   switch(type) {
     case 'new-tab':return createTab(payload?.url || 'nova://newtab', {private:Boolean(payload?.private)});
     case 'close-tab':return closeTab(payload?.id ?? activeId);
     case 'select-tab':return selectTab(payload?.id);
+    case 'detach-tab':return detachTab(payload?.id);
     case 'navigate':return navigate(payload?.id || activeId,payload?.text);
     case 'back':if(active && active.view.webContents.canGoBack()) active.view.webContents.goBack();return;
     case 'forward':if(active && active.view.webContents.canGoForward()) active.view.webContents.goForward();return;
@@ -577,106 +739,6 @@ function browserAction(type, payload) {
     default: throw new Error('Unknown action');
   }
 }
-function updateSetting(key, value) {
-  if (key === 'adblock' && typeof value === 'boolean') return setAdblock(value);
-  if (key === 'sidebar' && typeof value === 'boolean') {settings.sidebar=value;positionActiveView();}
-  else if (key === 'bookmarkBar' && typeof value === 'boolean') {settings.bookmarkBar=value;positionActiveView();positionDownloadPanel();}
-  else if (key === 'accent' && ['violet','red','cyan','emerald'].includes(value)) settings.accent=value;
-  else return false;
-  saveSoon();emitState();sendInternalUpdate();return true;
-}
-function setAdblock(value) {
-  settings.adblock=Boolean(value);
-  if(blocker){
-    for (const ses of [normalSession,privateSession]) {
-      try {blocker.disableBlockingInSession(ses);} catch {}
-      if(settings.adblock) try {blocker.enableBlockingInSession(ses);} catch (err) {console.error(err);}
-    }
-  }
-  if(!settings.adblock) {
-    for(const tab of tabs.values()) if(!tab.view.webContents.isDestroyed() && tab.kind==='web') {
-      tab.view.webContents.executeJavaScript('window.__novaYT?.stop?.()').catch(()=>{});
-    }
-  } else {
-    for(const tab of tabs.values()) injectYouTubeHelper(tab);
-  }
-  saveSoon();emitState();sendInternalUpdate();return settings.adblock;
-}
-async function initAdblock(forceRefresh=false) {
-  try {
-    const {ElectronBlocker}=require('@ghostery/adblocker-electron');
-    if(!blocker){
-      // Start with bundled offline fallback until richer lists are available.
-      blocker=ElectronBlocker.parse(fs.readFileSync(path.join(__dirname,'src','filters-fallback.txt'),'utf8'));
-      if(settings.adblock)for(const s of [normalSession,privateSession]) blocker.enableBlockingInSession(s);
-      blockerStatus='basic';emitState();
-    }
-    if(forceRefresh) try{fs.unlinkSync(blockerCacheFile());}catch{}
-    const full=await ElectronBlocker.fromPrebuiltAdsAndTracking(fetch, {
-      path:blockerCacheFile(),read:fs.promises.readFile,write:fs.promises.writeFile
-    });
-    const old=blocker;
-    for(const s of [normalSession,privateSession]) try {old.disableBlockingInSession(s);}catch{}
-    blocker=full;
-    if(settings.adblock)for(const s of [normalSession,privateSession]) blocker.enableBlockingInSession(s);
-    blockerStatus='full';protectionError='';emitState();sendInternalUpdate();
-    return true;
-  } catch(err) {
-    console.warn('Full ad lists unavailable; using bundled protection:',err.message);
-    protectionError='Could not refresh full lists. Basic offline rules are still available.';
-    blockerStatus=blocker?'basic':'error';emitState();sendInternalUpdate();
-    return false;
-  }
-}
-function uniqueDownloadPath(filename) {
-  const base=app.getPath('downloads');
-  const cleaned=path.basename(filename).replace(/[<>:"/\\|?*\x00-\x1f]/g,'_') || 'download';
-  const ext=path.extname(cleaned), stem=path.basename(cleaned,ext);
-  let candidate=path.join(base,cleaned),i=1;
-  while(fs.existsSync(candidate) && i<9999) candidate=path.join(base,`${stem} (${i++})${ext}`);
-  return candidate;
-}
-function setupSession(ses, isPrivate) {
-  // Prevent sites from rejecting the Electron-specific user agent token.
-  ses.setUserAgent(ses.getUserAgent().replace(/\sElectron\/[\d.]+/g, ''));
-  const grants=new Set();
-  ses.setPermissionCheckHandler((_wc,permission,origin)=>grants.has(String(origin)+'|'+permission));
-  ses.setPermissionRequestHandler((wc,permission,callback,details) => {
-    const allowed=new Set(['media','notifications','geolocation']);
-    if(!allowed.has(permission) || !wc || wc.isDestroyed()) return callback(false);
-    let origin;
-    try{const raw=details?.requestingUrl || wc.getURL();origin=new URL(raw);if(origin.protocol!=='https:' && origin.hostname!=='localhost')return callback(false);}
-    catch{return callback(false);}
-    dialog.showMessageBox(win,{type:'question',buttons:['Block','Allow'],defaultId:0,cancelId:0,
-      title:'Website permission', message:`Allow ${origin.hostname} to use ${permission}?`,
-      detail:'Only allow sites you trust.'}).then(({response})=>{if(response===1)grants.add(origin.origin+'|'+permission);callback(response===1);}).catch(()=>callback(false));
-  });
-  ses.on('will-download', (_event,item) => {
-    const dest=uniqueDownloadPath(item.getFilename());
-    item.setSavePath(dest);
-    const row={id:String(Date.now())+'-'+Math.random().toString(36).slice(2,6),
-      filename:path.basename(dest),path:isPrivate?'':dest,url:isPrivate?'':item.getURL(),
-      received:0,total:item.getTotalBytes(),state:'progressing',time:Date.now(),private:isPrivate};
-    if(!isPrivate){
-      downloads.unshift(row);downloads=downloads.slice(0,100);saveSoon();
-      activeDownloadItems.set(row.id,item);
-    }
-    let lastUiUpdate=0;
-    item.on('updated', () => {
-      row.received=item.getReceivedBytes();row.total=item.getTotalBytes();
-      row.state=item.isPaused()?'paused':'progressing';
-      if (!isPrivate && Date.now()-lastUiUpdate>=300) {
-        lastUiUpdate=Date.now();emitDownloads();sendInternalUpdate();
-      }
-    });
-    item.once('done', (_e,state)=>{
-      row.state=state;row.received=item.getReceivedBytes();
-      if(!isPrivate){activeDownloadItems.delete(row.id);saveSoon();emitDownloads();}
-      sendInternalUpdate();
-    });
-    sendInternalUpdate();emitDownloads();
-  });
-}
 function keyboard(event,input,sourceTab) {
   if(input.type!=='keyDown')return;
   const mod=process.platform==='darwin'?input.meta:input.control;
@@ -702,8 +764,8 @@ function keyboard(event,input,sourceTab) {
   else if(key==='escape' && downloadPanelOpen) {event.preventDefault();closeDownloadPanel();}
   else if(key==='escape' && activeFind) {browserAction('find-end');win.webContents.send('nova:hide-find');}
 }
-function createWindow() {
-  win=new BrowserWindow({width:1440,height:910,minWidth:760,minHeight:500,
+function createWindow(options = {}) {
+  win=new BrowserWindow({width:1440,height:910,minWidth:760,minHeight:500,...(options.bounds || {}),
     frame:false,backgroundColor:'#0b0d15',title:'Nova Browser',show:false,
     icon:path.join(__dirname,'build','icon.png'),
     webPreferences:{preload:path.join(__dirname,'preload.js'),nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true,webviewTag:false}});
@@ -712,7 +774,10 @@ function createWindow() {
   win.once('ready-to-show',()=>win.show());
   win.on('resize',()=>{positionActiveView();positionDownloadPanel();});
   win.on('maximize',emitState);win.on('unmaximize',emitState);
-  win.on('closed',()=>{downloadPanelOpen=false;downloadPanel=null;win=null;for(const tab of tabs.values()) if(!tab.view.webContents.isDestroyed())tab.view.webContents.close();tabs.clear();groups.clear();order=[];activeId=null;});
+  win.on('closed',()=>{controllers.delete(controller);downloadPanelOpen=false;
+    if(downloadPanel && !downloadPanel.webContents.isDestroyed())downloadPanel.webContents.close();
+    downloadPanel=null;win=null;for(const tab of tabs.values()) if(!tab.view.webContents.isDestroyed())tab.view.webContents.close();
+    tabs.clear();groups.clear();order=[];activeId=null;});
   win.webContents.on('before-input-event',(e,i)=>keyboard(e,i));
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   win.webContents.on('will-navigate',(event)=>event.preventDefault());
@@ -728,7 +793,7 @@ function createWindow() {
     if(input.type==='keyDown' && input.key==='Escape'){event.preventDefault();closeDownloadPanel();}
     if(input.type==='keyDown' && (input.control || input.meta) && (input.key||'').toLowerCase()==='j'){event.preventDefault();closeDownloadPanel();}
   });
-  createTab();
+  if (!options.empty) createTab();
 }
 function checkInternalSender(event) {
   if (event.senderFrame !== event.sender.mainFrame) return null;
@@ -736,6 +801,38 @@ function checkInternalSender(event) {
       event.sender.getURL().startsWith('file://') && event.sender.getURL().includes('/internal.html')) return tab;
   return null;
 }
+
+// Native position check prevents reorders and drops within Nova from tearing off tabs.
+function detachTab(id, force = false) {
+  const tab=tabs.get(Number(id));
+  if(!tab || !win || win.isDestroyed())return false;
+  const point=screen.getCursorScreenPoint();
+  if(!force && !isPointOutsideBounds(point,win.getBounds()))return false;
+  const display=screen.getDisplayNearestPoint(point);
+  const destination=createBrowserController({empty:true,bounds:detachedWindowBounds(point,display.workArea)});
+  const originalIndex=order.indexOf(tab.id);
+  const wasActive=activeId===tab.id;
+  closeDownloadPanel();
+  if(wasActive)win.contentView.removeChildView(tab.view);
+  order.splice(originalIndex,1);tabs.delete(tab.id);
+  cleanupGroup(tab.groupId);
+  tab.groupId=null;
+  if(wasActive){activeId=null;if(order.length)selectTab(order[Math.min(originalIndex,order.length-1)]);else createTab();}
+  else emitState();
+  destination.adoptTab(tab);
+  return true;
+}
+function adoptTab(tab) {
+  // Reparent the *existing* WebContentsView: live media, form contents, and
+  // back/forward history remain intact instead of reloading the URL.
+  if (!tab || tabs.size>=40)return false;
+  tab.owner=controller;tab.groupId=null;
+  tabs.set(tab.id,tab);order.push(tab.id);
+  selectTab(tab.id);
+  return true;
+}
+}
+
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
   if (process.platform === 'win32') app.setAppUserModelId('com.nova.browser');
@@ -746,36 +843,35 @@ app.whenReady().then(() => {
   privateSession=session.fromPartition('nova-private');
   setupSession(normalSession,false);setupSession(privateSession,true);
   ipcMain.handle('nova:action',(event,action,payload)=>{
-    if(!win || event.sender.id!==win.webContents.id)return null;
-    return browserAction(String(action).slice(0,50),payload||{});
+    const controller=findChromeController(event);
+    if(!controller)return null;
+    return controller.action(String(action).slice(0,50),payload||{});
   });
-  ipcMain.handle('nova:get-state',(event)=>{
-    if(!win || event.sender.id!==win.webContents.id)return null;
-    return snapshot();
-  });
+  ipcMain.handle('nova:get-state',(event)=>findChromeController(event)?.snapshot() ?? null);
   ipcMain.handle('nova:downloads',(event,action,payload)=>{
-    if(!downloadPanel || event.sender.id!==downloadPanel.webContents.id ||
-        event.senderFrame!==event.sender.mainFrame ||
-        !event.sender.getURL().startsWith('file://')) return null;
+    const controller=findDownloadsController(event);
+    if(!controller)return null;
     switch(action){
       case 'list':return publicDownloads();
-      case 'close':closeDownloadPanel();return true;
+      case 'close':controller.closeDownloadPanel();return true;
       case 'open-download':case 'show-download':case 'pause-download':case 'resume-download':case 'cancel-download':case 'clear-downloads':
         return downloadAction(action,payload?.id);
-      case 'all-downloads':closeDownloadPanel();createTab('nova://downloads');return true;
+      case 'all-downloads':controller.closeDownloadPanel();controller.newTab('nova://downloads');return true;
       default:return null;
     }
   });
+  ipcMain.on('nova:start-download-drag',(event,id)=>{
+    try{startNativeDownloadDrag(event,id);}catch(err){console.warn('Native file drag failed:',err.message);}
+  });
   ipcMain.handle('nova:internal',(event,action,payload)=>{
-    const tab=checkInternalSender(event);if(!tab)return null;
+    const context=findInternalTab(event);if(!context)return null;
+    const {tab,controller}=context;
     switch(action){
       case 'get-data':return {page:tab.page,private:tab.private,settings,bookmarks,
         history:tab.private?[]:historyItems,downloads:tab.private?[]:downloads,protection:blockerStatus,protectionError,updates:updateService?.snapshot() || null};
-      case 'navigate':navigate(tab.id,payload?.text);return true;
-      case 'new-tab':createTab(payload?.url||'nova://newtab',{private:tab.private});return true;
-      case 'delete-bookmark':{
-        return removeBookmark(payload?.url);
-      }
+      case 'navigate':controller.navigate(tab.id,payload?.text);return true;
+      case 'new-tab':controller.newTab(payload?.url||'nova://newtab',{private:tab.private});return true;
+      case 'delete-bookmark':return removeBookmark(payload?.url);
       case 'remove-history':{
         const url=String(payload?.url||'');historyItems=historyItems.filter(h=>h.url!==url);saveSoon();sendInternalUpdate();return true;
       }
@@ -784,7 +880,7 @@ app.whenReady().then(() => {
       case 'refresh-filters':initAdblock(true);return true;
       case 'open-release-page':shell.openExternal('https://github.com/NoobIsADev/nova/releases/latest');return true;
       case 'check-updates':return updateService?.check() ?? false;
-      case 'install-update':return false; // Updates install automatically when the browser closes.
+      case 'install-update':return false;
       case 'show-download':{
         const item=downloads.find(d=>d.id===payload?.id);
         if(item && item.path && fs.existsSync(item.path))shell.showItemInFolder(item.path);
@@ -794,8 +890,6 @@ app.whenReady().then(() => {
       default:return null;
     }
   });
-  // Windows Setup, Linux AppImage, and signed macOS DMG builds receive updates.
-  // Unsigned macOS builds and Windows portable builds stay manual-update only.
   const signedMac = process.platform === 'darwin' && app.isPackaged && signedMacUpdateAvailable(process.resourcesPath);
   const canLoadUpdater = app.isPackaged && (
     (process.platform === 'win32' && !process.env.PORTABLE_EXECUTABLE_FILE) ||
@@ -806,17 +900,14 @@ app.whenReady().then(() => {
     app, signedMac, notify:()=>{emitState();sendInternalUpdate();},
     updater:canLoadUpdater ? require('electron-updater').autoUpdater : null
   });
-  createWindow();
+  createBrowserController();
   updateService.start();
-  // The offline rules protect immediately, while full community lists update in the background.
   initAdblock();
-  app.on('activate',()=>{if(BrowserWindow.getAllWindows().length===0)createWindow();});
+  app.on('activate',()=>{if(BrowserWindow.getAllWindows().length===0)createBrowserController();});
 });
 app.on('before-quit',()=>{
   updateService?.stop();
   clearTimeout(writeTimer);
   if(settings)try{fs.writeFileSync(dataFile(),JSON.stringify(settingsFile(),null,2));}catch{}
 });
-// Closing the last window quits on all platforms (including macOS), so the
-// downloaded update installs on exit instead of leaving a headless Mac app.
 app.on('window-all-closed',()=>app.quit());

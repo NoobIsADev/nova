@@ -39,6 +39,39 @@ increment `package.json` first. Do not commit secrets in the project folder.
 The GitHub Actions run creates and attaches the binary after the script uploads
 the release tag; allow a few minutes for the build.
 
+## Nova 1.4.2 — Detachable tabs and native download dragging
+
+- **Drag any tab outside its browser window** and release it to open that live tab
+  in a new full Nova window near the drop position. The page is **reparented**,
+  not reloaded, preserving its navigation history, playback and current session.
+  The original window stays open (and gets a blank New Tab when its only tab
+  was detached).
+- **Right-click a tab → Move tab to new window** as an alternative to dragging.
+- Tabs, groups, toolbar actions and the downloads popup now work independently
+  in each window. Bookmarks, download history and privacy settings remain shared.
+- **Drag a completed download** from the Downloads toolbar dropdown or the
+  full Downloads page directly onto your Desktop, Finder, or File Explorer.
+  This uses Electron's native OS file dragging; unfinished, cancelled or missing
+  files cannot be dragged. Depending on your operating system and destination,
+  dropping may copy or move the file.
+- Works from the same codebase on Windows, Linux and macOS. The
+  cross-platform GitHub Actions release workflow, unattended updater and
+  `PUBLISH-TO-GITHUB.bat` are included unchanged.
+
+### Publish v1.4.2 to GitHub
+
+Extract this ZIP and double-click **`PUBLISH-TO-GITHUB.bat`** on a Windows PC
+with Git installed. The script uploads the source and `v1.4.2` tag to
+`https://github.com/NoobIsADev/nova`. GitHub Actions then builds the Windows
+Setup/Portable EXEs and Linux AppImage, and macOS files if the Mac build works.
+**No local npm build is needed for publishing.** A tag alone doesn't immediately
+publish binaries: GitHub Actions must finish successfully.
+
+**Testing:** 41 local JavaScript tests (including mock Electron live-view transfer
+and native download-drag authorization) pass. Because this environment doesn't
+have Electron installed, drag-and-drop still needs manual verification on the
+actual target operating systems before a public release.
+
 ## Nova 1.4.0 — Windows, Linux, macOS, and install-on-close updates
 
 **GitHub repository:** https://github.com/NoobIsADev/nova

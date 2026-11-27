@@ -3,6 +3,7 @@ const {contextBridge,ipcRenderer}=require('electron');
 if(location.protocol==='file:' && location.pathname.endsWith('/internal.html')) {
   contextBridge.exposeInMainWorld('novaPage',Object.freeze({
     action:(name,payload)=>ipcRenderer.invoke('nova:internal',name,payload),
+    startDownloadDrag:(id)=>ipcRenderer.send('nova:start-download-drag',id),
     onUpdate:(fn)=>{const l=()=>fn();ipcRenderer.on('nova:data-updated',l);return()=>ipcRenderer.removeListener('nova:data-updated',l);}
   }));
 }

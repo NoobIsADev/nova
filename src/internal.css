@@ -33,3 +33,7 @@
 .newtab-page .hero-logo{width:min(225px,42vw);height:clamp(130px,21vh,210px);margin-bottom:45px}
 .newtab-page .hero-clean:before{top:-30px}
 @media(max-width:720px){.newtab-page{padding:25px}.newtab-page .hero-clean{padding-bottom:35px}.newtab-page .hero-logo{margin-bottom:27px}}
+
+/* Native OS file dragging from the full Downloads page. */
+.entry[draggable="true"]{cursor:grab;user-select:none}
+.entry[draggable="true"]:active{cursor:grabbing}

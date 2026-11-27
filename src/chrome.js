@@ -46,7 +46,13 @@ function makeTab(tab){
   b.addEventListener('auxclick',e=>{if(e.button===1)window.nova.action('close-tab',{id:tab.id});});
   b.addEventListener('contextmenu',e=>{e.preventDefault();window.nova.action('tab-context',{id:tab.id});});
   b.addEventListener('dragstart',e=>{e.dataTransfer.setData('text/nova-tab',String(tab.id));e.dataTransfer.effectAllowed='move';b.classList.add('dragging');});
-  b.addEventListener('dragend',()=>{b.classList.remove('dragging');document.querySelectorAll('.drag-over,.drag-left,.drag-right').forEach(el=>el.classList.remove('drag-over','drag-left','drag-right'));});
+  b.addEventListener('dragend',()=>{
+    b.classList.remove('dragging');
+    document.querySelectorAll('.drag-over,.drag-left,.drag-right').forEach(el=>el.classList.remove('drag-over','drag-left','drag-right'));
+    // A drop inside Nova is handled by tab/group drop listeners. A drop
+    // outside the native window tears off the live tab at the cursor.
+    window.nova.action('detach-tab',{id:tab.id}).catch(()=>{});
+  });
   b.addEventListener('dragover',e=>{
     if(!e.dataTransfer.types.includes('text/nova-tab'))return;e.preventDefault();e.dataTransfer.dropEffect='move';
     const rel=(e.clientX-b.getBoundingClientRect().left)/Math.max(1,b.clientWidth);
